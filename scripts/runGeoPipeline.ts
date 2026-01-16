@@ -10,7 +10,8 @@
  * - Loads BusinessInput from /inputs/example.business.json
  * - Validates required fields
  * - Executes the GEO pipeline
- * - Writes output to /outputs/example-output.json
+ * - Runs all output adapters (JSON, Markdown, HTML)
+ * - Writes three output files to /outputs
  */
 
 import * as fs from 'fs';
@@ -19,9 +20,17 @@ import * as path from 'path';
 import type { BusinessInput } from '../inputs/business.schema';
 import { runGEOPipeline, validatePipelineInput } from '../core/pipeline/geoPipeline';
 
+// Import adapters
+import { toJSONString } from '../adapters/json.adapter';
+import { toMarkdown } from '../adapters/markdown.adapter';
+import { toHTML } from '../adapters/html.adapter';
+
 // File paths
 const INPUT_FILE = path.resolve(__dirname, '../inputs/example.business.json');
-const OUTPUT_FILE = path.resolve(__dirname, '../outputs/example-output.json');
+const OUTPUT_DIR = path.resolve(__dirname, '../outputs');
+const OUTPUT_JSON = path.join(OUTPUT_DIR, 'example-output.json');
+const OUTPUT_MD = path.join(OUTPUT_DIR, 'example-output.md');
+const OUTPUT_HTML = path.join(OUTPUT_DIR, 'example-output.html');
 
 /**
  * Main execution function
@@ -82,23 +91,49 @@ function main(): void {
 
   console.log('Pipeline execution complete.\n');
 
-  // Step 5: Write output
-  console.log(`Writing output to: ${OUTPUT_FILE}`);
+  // Ensure output directory exists
+  if (!fs.existsSync(OUTPUT_DIR)) {
+    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+  }
 
+  // Step 5: Run adapters and write outputs
+  console.log('Running output adapters...\n');
+
+  // JSON output (canonical)
+  console.log(`  Writing JSON: ${OUTPUT_JSON}`);
   try {
-    const outputDir = path.dirname(OUTPUT_FILE);
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-
-    fs.writeFileSync(OUTPUT_FILE, JSON.stringify(output, null, 2), 'utf-8');
+    const jsonOutput = toJSONString(output);
+    fs.writeFileSync(OUTPUT_JSON, jsonOutput, 'utf-8');
   } catch (err) {
-    console.error(`ERROR: Failed to write output file: ${err}`);
+    console.error(`ERROR: JSON adapter failed: ${err}`);
+    process.exit(1);
+  }
+
+  // Markdown output
+  console.log(`  Writing Markdown: ${OUTPUT_MD}`);
+  try {
+    const mdOutput = toMarkdown(output);
+    fs.writeFileSync(OUTPUT_MD, mdOutput, 'utf-8');
+  } catch (err) {
+    console.error(`ERROR: Markdown adapter failed: ${err}`);
+    process.exit(1);
+  }
+
+  // HTML output
+  console.log(`  Writing HTML: ${OUTPUT_HTML}`);
+  try {
+    const htmlOutput = toHTML(output);
+    fs.writeFileSync(OUTPUT_HTML, htmlOutput, 'utf-8');
+  } catch (err) {
+    console.error(`ERROR: HTML adapter failed: ${err}`);
     process.exit(1);
   }
 
   console.log('\nGEO Pipeline completed successfully.');
-  console.log(`Output written to: ${OUTPUT_FILE}`);
+  console.log('Outputs written:');
+  console.log(`  - ${OUTPUT_JSON}`);
+  console.log(`  - ${OUTPUT_MD}`);
+  console.log(`  - ${OUTPUT_HTML}`);
 }
 
 /**
