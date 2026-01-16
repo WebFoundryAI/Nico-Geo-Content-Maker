@@ -805,6 +805,138 @@ function runAuditRules(ctx: AuditContext): Issue[] {
     }
   }
 
+  // ============================================================
+  // ADDITIONAL CHECKS (ensure 10+ issues for most sites)
+  // ============================================================
+
+  // Check for FAQ schema (important for AI visibility)
+  const hasFAQSchema = hp.jsonLdTypes.some(t => t.toLowerCase().includes('faq'));
+  if (!hasFAQSchema && hp.wordCount > 300) {
+    issues.push({
+      title: 'Missing FAQ Schema',
+      priority: 'medium',
+      evidence: `No FAQPage schema found. Schema types present: ${hp.jsonLdTypes.length > 0 ? hp.jsonLdTypes.join(', ') : 'none'}`,
+      impact: 'FAQ schema helps AI extract and cite your answers directly in search results.',
+      recommendation: 'Add FAQPage schema for common questions about your services.',
+    });
+  }
+
+  // Check for breadcrumb schema
+  const hasBreadcrumbSchema = hp.jsonLdTypes.some(t => t.toLowerCase().includes('breadcrumb'));
+  if (!hasBreadcrumbSchema && ctx.crawledPages.length > 0) {
+    issues.push({
+      title: 'Missing Breadcrumb Schema',
+      priority: 'low',
+      evidence: 'No BreadcrumbList schema detected on site',
+      impact: 'Breadcrumb schema improves site structure understanding and search appearance.',
+      recommendation: 'Add BreadcrumbList schema to all pages showing navigation hierarchy.',
+    });
+  }
+
+  // Check external link count (too few = isolated, too many = link leakage)
+  if (hp.externalLinkCount === 0) {
+    issues.push({
+      title: 'No External Links',
+      priority: 'low',
+      evidence: 'Homepage has 0 external links to authoritative sources',
+      impact: 'Linking to relevant authorities shows AI you connect to the broader web.',
+      recommendation: 'Add 2-5 links to industry associations, certifications, or trusted resources.',
+    });
+  }
+
+  // Check heading hierarchy (H2 without H1, or H3 without H2)
+  if (hp.h1Count === 0 && hp.h2s.length > 0) {
+    issues.push({
+      title: 'Broken Heading Hierarchy',
+      priority: 'medium',
+      evidence: `Found ${hp.h2s.length} H2s but no H1 - heading structure is broken`,
+      impact: 'Headings must follow H1→H2→H3 order for AI to parse content correctly.',
+      recommendation: 'Add an H1 before your H2 headings.',
+    });
+  }
+
+  // Check for social proof signals
+  const bodyLower = hp.bodyText.toLowerCase();
+  const hasSocialProof = bodyLower.includes('review') || bodyLower.includes('testimonial') ||
+                         bodyLower.includes('rating') || bodyLower.includes('customer') ||
+                         bodyLower.includes('client');
+  if (!hasSocialProof && hp.wordCount > 200) {
+    issues.push({
+      title: 'No Social Proof Detected',
+      priority: 'medium',
+      evidence: 'No mentions of reviews, testimonials, ratings, or customer feedback found',
+      impact: 'Social proof signals trust. AI assistants favor businesses with visible reviews.',
+      recommendation: 'Add a testimonials section or link to Google/Yelp reviews.',
+    });
+  }
+
+  // Check for service area specificity
+  if (hp.hasGeoKeywords && hp.geoTermsFound.length < 3) {
+    issues.push({
+      title: 'Limited Service Area Coverage',
+      priority: 'medium',
+      evidence: `Only ${hp.geoTermsFound.length} location terms found: ${hp.geoTermsFound.join(', ')}`,
+      impact: 'Mentioning more specific areas helps AI recommend you for hyper-local queries.',
+      recommendation: 'Add neighborhoods, districts, and nearby towns you serve.',
+    });
+  }
+
+  // Check page load signals (large image count)
+  if (hp.imageCount > 20) {
+    issues.push({
+      title: 'High Image Count',
+      priority: 'low',
+      evidence: `${hp.imageCount} images on homepage may impact load speed`,
+      impact: 'Too many images slow page load, hurting rankings and user experience.',
+      recommendation: 'Optimize images, use lazy loading, and consider removing non-essential images.',
+    });
+  }
+
+  // Check for pricing/cost signals (important for service businesses)
+  const hasPricingSignals = bodyLower.includes('price') || bodyLower.includes('cost') ||
+                            bodyLower.includes('quote') || bodyLower.includes('estimate') ||
+                            bodyLower.includes('£') || bodyLower.includes('$');
+  if (!hasPricingSignals && hp.hasServiceKeywords) {
+    issues.push({
+      title: 'No Pricing Information',
+      priority: 'medium',
+      evidence: 'No pricing, cost, or quote-related terms found on homepage',
+      impact: 'Users and AI want to understand pricing. Missing info reduces conversion.',
+      recommendation: 'Add pricing ranges, "free estimate" messaging, or "call for quote" CTAs.',
+    });
+  }
+
+  // Check for call-to-action presence
+  const hasCTA = bodyLower.includes('call us') || bodyLower.includes('contact us') ||
+                 bodyLower.includes('get a quote') || bodyLower.includes('book') ||
+                 bodyLower.includes('schedule') || bodyLower.includes('request');
+  if (!hasCTA) {
+    issues.push({
+      title: 'Weak Call-to-Action',
+      priority: 'medium',
+      evidence: 'No clear call-to-action phrases detected on homepage',
+      impact: 'Without CTAs, visitors don\'t know what action to take next.',
+      recommendation: 'Add prominent CTAs: "Call Now", "Get Free Quote", "Book Online".',
+    });
+  }
+
+  // Check meta description contains service + location
+  if (hp.metaDescription) {
+    const metaLower = hp.metaDescription.toLowerCase();
+    const metaHasService = SERVICE_TERMS.some(t => metaLower.includes(t.toLowerCase()));
+    const metaHasGeo = GEO_TERMS.some(t => metaLower.includes(t.toLowerCase()));
+
+    if (!metaHasService || !metaHasGeo) {
+      issues.push({
+        title: 'Meta Description Missing Key Terms',
+        priority: 'medium',
+        evidence: `Meta description ${!metaHasService ? 'lacks service keywords' : ''}${!metaHasService && !metaHasGeo ? ' and ' : ''}${!metaHasGeo ? 'lacks location terms' : ''}`,
+        impact: 'Meta descriptions should include your service and location for local SEO.',
+        recommendation: 'Rewrite: "[Service] in [City]. [Unique value]. Call [phone]."',
+      });
+    }
+  }
+
   return issues;
 }
 
