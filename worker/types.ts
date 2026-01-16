@@ -9,7 +9,8 @@ import type { SiteGapAnalysis, GapFlag } from '../core/analyze/geoGapAnalyzer';
 import type { SiteImprovementPlan, PageImprovementPlan } from '../core/analyze/improvementPlanner';
 import type { CrawlResult } from '../core/ingest/siteCrawler';
 import type { CommitResult } from '../core/writeback/githubClient';
-import type { FilePatch } from '../core/writeback/patchApplier';
+import type { FilePatch, PlannedFileChange, DiffPreview } from '../core/writeback/patchApplier';
+import type { ProjectType, RouteStrategy, PathContractConfig } from '../core/writeback/pathContract';
 
 /**
  * Supported execution modes for the GEO Worker.
@@ -33,6 +34,10 @@ export interface TargetRepoConfig {
   owner: string;
   repo: string;
   branch: string;
+  /** Project type determines file structure (astro-pages or static-html) */
+  projectType: ProjectType;
+  /** Route strategy determines file naming (path-index or flat-html) */
+  routeStrategy: RouteStrategy;
 }
 
 /**
@@ -71,6 +76,8 @@ export interface RunRequest {
   businessInput?: BusinessInput;
   constraints: RunConstraints;
   writeBack?: boolean;
+  /** Request diff preview without applying changes */
+  diffPreview?: boolean;
   targetRepo?: TargetRepoConfig;
   writeBackConfig?: WriteBackConfig;
 }
@@ -132,6 +139,26 @@ export interface WriteBackResult {
     operation: 'create' | 'update' | 'append';
     humanReviewRequired: boolean;
     reviewNotes: string[];
+  }>;
+  /** Planned file changes with full details (for diff preview) */
+  plannedChanges: Array<{
+    url: string;
+    filePath: string;
+    action: 'create' | 'update' | 'no-op';
+    humanReviewRequired: boolean;
+    reviewNotes: string[];
+  }>;
+  /** Unified diff previews for each planned change */
+  diffPreviews: Array<{
+    filePath: string;
+    action: 'create' | 'update' | 'no-op';
+    diff: string;
+    truncated: boolean;
+  }>;
+  /** Path mapping errors (URLs that couldn't be mapped to files) */
+  mappingErrors: Array<{
+    url: string;
+    error: string;
   }>;
   errors: string[];
   warnings: string[];
@@ -236,6 +263,13 @@ export function isValidTargetRepo(targetRepo: unknown): targetRepo is TargetRepo
     typeof t.repo === 'string' &&
     t.repo.length > 0 &&
     typeof t.branch === 'string' &&
-    t.branch.length > 0
+    t.branch.length > 0 &&
+    (t.projectType === 'astro-pages' || t.projectType === 'static-html') &&
+    (t.routeStrategy === 'path-index' || t.routeStrategy === 'flat-html')
   );
 }
+
+/**
+ * Re-export path contract types for convenience.
+ */
+export type { ProjectType, RouteStrategy, PathContractConfig };
