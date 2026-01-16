@@ -27,25 +27,35 @@ interface AuditResponse {
   };
 }
 
-interface Signals {
-  finalUrl: string;
-  httpStatus: number;
+interface PageSignals {
+  url: string;
   title: string;
   metaDescription: string;
   h1Count: number;
   h1Text: string;
   h2s: string[];
   h3s: string[];
+  h4Count: number;
+  h5Count: number;
+  h6Count: number;
   wordCount: number;
   bodyText: string;
+  internalLinks: string[];
   internalLinkCount: number;
   externalLinkCount: number;
   anchorTexts: string[];
+  imageCount: number;
+  imagesWithAlt: number;
+  imagesMissingAlt: string[];
   jsonLdTypes: string[];
   hasLocalBusinessSchema: boolean;
   hasOrganizationSchema: boolean;
+  hasServiceSchema: boolean;
+  schemaDetails: string[];
   hasGeoKeywords: boolean;
   hasServiceKeywords: boolean;
+  geoTermsFound: string[];
+  serviceTermsFound: string[];
   robotsNoindex: boolean;
   canonicalUrl: string;
   hasPhone: boolean;
@@ -54,6 +64,15 @@ interface Signals {
   emails: string[];
   hasAddress: boolean;
   addressSignals: string[];
+  napConsistent: boolean;
+  isServicePage: boolean;
+  isLocationPage: boolean;
+}
+
+interface AuditContext {
+  homepage: PageSignals;
+  crawledPages: PageSignals[];
+  allPages: PageSignals[];
 }
 
 // ============================================================
@@ -61,10 +80,10 @@ interface Signals {
 // ============================================================
 
 const WEIGHTS: Record<string, number> = {
-  critical: 25,
-  high: 15,
-  medium: 8,
-  low: 3,
+  critical: 20,
+  high: 12,
+  medium: 6,
+  low: 2,
 };
 
 const GEO_TERMS = [
@@ -74,8 +93,9 @@ const GEO_TERMS = [
   'new york', 'los angeles', 'chicago', 'houston', 'phoenix', 'philadelphia',
   'san antonio', 'san diego', 'dallas', 'san jose', 'austin', 'jacksonville',
   'fort worth', 'columbus', 'charlotte', 'seattle', 'denver', 'boston', 'portland',
+  'miami', 'atlanta', 'detroit', 'minneapolis', 'tampa', 'brooklyn', 'queens',
   'local', 'near me', 'nearby', 'area', 'region', 'city', 'town', 'county',
-  'district', 'neighborhood', 'serving', 'service area',
+  'district', 'neighborhood', 'serving', 'service area', 'located in', 'based in',
   'north', 'south', 'east', 'west', 'central', 'downtown', 'midtown', 'uptown',
 ];
 
@@ -87,59 +107,88 @@ const SERVICE_TERMS = [
   'renovation', 'repair', 'installation', 'maintenance', 'emergency', '24/7',
   'same day', 'free estimate', 'licensed', 'insured', 'certified', 'professional',
   'expert', 'specialist', 'services', 'solutions', 'company', 'business',
+  'consultation', 'inspection', 'assessment', 'quote', 'pricing',
+  'residential', 'commercial', 'industrial', 'domestic',
+];
+
+const SERVICE_PAGE_INDICATORS = [
+  '/service', '/services', '/what-we-do', '/our-services', '/offerings',
+  '/plumbing', '/electrical', '/hvac', '/roofing', '/cleaning', '/repair',
+];
+
+const LOCATION_PAGE_INDICATORS = [
+  '/location', '/locations', '/areas', '/service-area', '/coverage',
+  '/near-', '/in-', '/serving-',
 ];
 
 // ============================================================
 // HTML FETCHING
 // ============================================================
 
-async function fetchHtml(siteUrl: string): Promise<{ html: string; finalUrl: string; status: number }> {
-  let url = siteUrl;
-  if (!url.startsWith('http')) {
-    url = 'https://' + url;
+async function fetchHtml(url: string): Promise<{ html: string; finalUrl: string; status: number } | null> {
+  try {
+    if (!url.startsWith('http')) {
+      url = 'https://' + url;
+    }
+
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; NicoGEOBot/1.0; +https://nico.ai)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
+      redirect: 'follow',
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const html = await response.text();
+    return {
+      html,
+      finalUrl: response.url,
+      status: response.status,
+    };
+  } catch {
+    return null;
   }
-
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; NicoGEOBot/1.0; +https://nico.ai)',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.5',
-    },
-    redirect: 'follow',
-  });
-
-  const html = await response.text();
-  return {
-    html,
-    finalUrl: response.url,
-    status: response.status,
-  };
 }
 
 // ============================================================
-// SIGNAL EXTRACTION (HTMLRewriter + Regex)
+// SIGNAL EXTRACTION
 // ============================================================
 
-async function extractSignals(html: string, siteUrl: string, finalUrl: string, status: number): Promise<Signals> {
-  const signals: Signals = {
-    finalUrl,
-    httpStatus: status,
+function extractSignals(html: string, pageUrl: string): PageSignals {
+  const signals: PageSignals = {
+    url: pageUrl,
     title: '',
     metaDescription: '',
     h1Count: 0,
     h1Text: '',
     h2s: [],
     h3s: [],
+    h4Count: 0,
+    h5Count: 0,
+    h6Count: 0,
     wordCount: 0,
     bodyText: '',
+    internalLinks: [],
     internalLinkCount: 0,
     externalLinkCount: 0,
     anchorTexts: [],
+    imageCount: 0,
+    imagesWithAlt: 0,
+    imagesMissingAlt: [],
     jsonLdTypes: [],
     hasLocalBusinessSchema: false,
     hasOrganizationSchema: false,
+    hasServiceSchema: false,
+    schemaDetails: [],
     hasGeoKeywords: false,
     hasServiceKeywords: false,
+    geoTermsFound: [],
+    serviceTermsFound: [],
     robotsNoindex: false,
     canonicalUrl: '',
     hasPhone: false,
@@ -148,109 +197,52 @@ async function extractSignals(html: string, siteUrl: string, finalUrl: string, s
     emails: [],
     hasAddress: false,
     addressSignals: [],
+    napConsistent: true,
+    isServicePage: false,
+    isLocationPage: false,
   };
 
-  const host = new URL(finalUrl).hostname;
+  let host = '';
+  try {
+    host = new URL(pageUrl).hostname;
+  } catch {
+    // Invalid URL
+  }
 
-  // Use HTMLRewriter for structured extraction
-  let currentTag = '';
-  let currentText = '';
-  const h1Texts: string[] = [];
+  // Detect page type
+  const urlLower = pageUrl.toLowerCase();
+  signals.isServicePage = SERVICE_PAGE_INDICATORS.some(ind => urlLower.includes(ind));
+  signals.isLocationPage = LOCATION_PAGE_INDICATORS.some(ind => urlLower.includes(ind));
 
-  const rewriter = new HTMLRewriter()
-    .on('title', {
-      element() { currentTag = 'title'; currentText = ''; },
-      text({ text }) { if (currentTag === 'title') currentText += text; },
-    })
-    .on('h1', {
-      element() {
-        currentTag = 'h1';
-        currentText = '';
-        signals.h1Count++;
-      },
-      text({ text }) { if (currentTag === 'h1') currentText += text; },
-    })
-    .on('h2', {
-      element() { currentTag = 'h2'; currentText = ''; },
-      text({ text }) { if (currentTag === 'h2') currentText += text; },
-    })
-    .on('h3', {
-      element() { currentTag = 'h3'; currentText = ''; },
-      text({ text }) { if (currentTag === 'h3') currentText += text; },
-    })
-    .on('meta', {
-      element(el) {
-        const name = (el.getAttribute('name') || '').toLowerCase();
-        const content = el.getAttribute('content') || '';
-        const httpEquiv = (el.getAttribute('http-equiv') || '').toLowerCase();
-
-        if (name === 'description') {
-          signals.metaDescription = content;
-        }
-        if (name === 'robots' && content.toLowerCase().includes('noindex')) {
-          signals.robotsNoindex = true;
-        }
-        if (httpEquiv === 'refresh' && content.includes('noindex')) {
-          signals.robotsNoindex = true;
-        }
-      },
-    })
-    .on('link[rel="canonical"]', {
-      element(el) {
-        signals.canonicalUrl = el.getAttribute('href') || '';
-      },
-    })
-    .on('a', {
-      element(el) {
-        const href = el.getAttribute('href') || '';
-        if (href && !href.startsWith('#') && !href.startsWith('javascript:') && !href.startsWith('mailto:') && !href.startsWith('tel:')) {
-          if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../') || href.includes(host)) {
-            signals.internalLinkCount++;
-          } else if (href.startsWith('http')) {
-            signals.externalLinkCount++;
-          }
-        }
-        currentTag = 'a';
-        currentText = '';
-      },
-      text({ text }) { if (currentTag === 'a') currentText += text; },
-    })
-    .on('script[type="application/ld+json"]', {
-      element() { currentTag = 'jsonld'; currentText = ''; },
-      text({ text }) { if (currentTag === 'jsonld') currentText += text; },
-    })
-    .on('body', {
-      element() { currentTag = 'body'; },
-    })
-    .on('body *', {
-      text({ text }) {
-        if (!['script', 'style', 'noscript'].includes(currentTag)) {
-          signals.bodyText += text + ' ';
-        }
-      },
-    });
-
-  // Create a Response to transform
-  const response = new Response(html);
-  const transformedResponse = rewriter.transform(response);
-
-  // We need to handle end tags manually with regex since HTMLRewriter doesn't have end handlers
-  await transformedResponse.text();
-
-  // Parse with regex for elements that need end-tag handling
   // Title
   const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
   if (titleMatch) signals.title = titleMatch[1].trim();
+
+  // Meta description
+  const metaMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
+                    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i);
+  if (metaMatch) signals.metaDescription = metaMatch[1];
+
+  // Robots noindex
+  const robotsMatch = html.match(/<meta[^>]+name=["']robots["'][^>]+content=["']([^"']+)["']/i);
+  if (robotsMatch && robotsMatch[1].toLowerCase().includes('noindex')) {
+    signals.robotsNoindex = true;
+  }
+
+  // Canonical
+  const canonicalMatch = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i);
+  if (canonicalMatch) signals.canonicalUrl = canonicalMatch[1];
 
   // H1s
   const h1Regex = /<h1[^>]*>([\s\S]*?)<\/h1>/gi;
   let h1Match;
   while ((h1Match = h1Regex.exec(html)) !== null) {
     const text = h1Match[1].replace(/<[^>]+>/g, '').trim();
-    if (text && !signals.h1Text) signals.h1Text = text;
-    h1Texts.push(text);
+    if (text) {
+      signals.h1Count++;
+      if (!signals.h1Text) signals.h1Text = text;
+    }
   }
-  signals.h1Count = h1Texts.length;
 
   // H2s
   const h2Regex = /<h2[^>]*>([\s\S]*?)<\/h2>/gi;
@@ -268,62 +260,106 @@ async function extractSignals(html: string, siteUrl: string, finalUrl: string, s
     if (text) signals.h3s.push(text);
   }
 
-  // Meta description (backup)
-  if (!signals.metaDescription) {
-    const metaMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i) ||
-                      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']description["']/i);
-    if (metaMatch) signals.metaDescription = metaMatch[1];
-  }
+  // H4-H6 counts
+  signals.h4Count = (html.match(/<h4[^>]*>/gi) || []).length;
+  signals.h5Count = (html.match(/<h5[^>]*>/gi) || []).length;
+  signals.h6Count = (html.match(/<h6[^>]*>/gi) || []).length;
 
-  // Robots noindex (backup)
-  if (!signals.robotsNoindex) {
-    const robotsMatch = html.match(/<meta[^>]+name=["']robots["'][^>]+content=["']([^"']+)["']/i);
-    if (robotsMatch && robotsMatch[1].toLowerCase().includes('noindex')) {
-      signals.robotsNoindex = true;
+  // Images
+  const imgRegex = /<img[^>]*>/gi;
+  let imgMatch;
+  while ((imgMatch = imgRegex.exec(html)) !== null) {
+    signals.imageCount++;
+    const imgTag = imgMatch[0];
+    const altMatch = imgTag.match(/alt=["']([^"']*)["']/i);
+    const srcMatch = imgTag.match(/src=["']([^"']+)["']/i);
+
+    if (altMatch && altMatch[1].trim()) {
+      signals.imagesWithAlt++;
+    } else {
+      const src = srcMatch ? srcMatch[1] : 'unknown';
+      signals.imagesMissingAlt.push(src.split('/').pop() || src);
     }
   }
 
-  // Canonical (backup)
-  if (!signals.canonicalUrl) {
-    const canonicalMatch = html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i);
-    if (canonicalMatch) signals.canonicalUrl = canonicalMatch[1];
+  // Links
+  const linkRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let linkMatch;
+  while ((linkMatch = linkRegex.exec(html)) !== null) {
+    const href = linkMatch[1];
+    const anchorText = linkMatch[2].replace(/<[^>]+>/g, '').trim();
+
+    if (href && !href.startsWith('#') && !href.startsWith('javascript:') && !href.startsWith('mailto:') && !href.startsWith('tel:')) {
+      if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../') || href.includes(host)) {
+        signals.internalLinkCount++;
+        // Normalize internal links
+        let fullUrl = href;
+        if (href.startsWith('/')) {
+          try {
+            fullUrl = new URL(href, pageUrl).href;
+          } catch {
+            fullUrl = href;
+          }
+        }
+        if (!signals.internalLinks.includes(fullUrl) && signals.internalLinks.length < 50) {
+          signals.internalLinks.push(fullUrl);
+        }
+      } else if (href.startsWith('http')) {
+        signals.externalLinkCount++;
+      }
+    }
+
+    if (anchorText && anchorText.length > 1 && anchorText.length < 100) {
+      signals.anchorTexts.push(anchorText);
+    }
   }
 
   // JSON-LD Schema
   const jsonLdRegex = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
   let jsonLdMatch;
   while ((jsonLdMatch = jsonLdRegex.exec(html)) !== null) {
-    const content = jsonLdMatch[1].toLowerCase();
+    const content = jsonLdMatch[1];
+    const contentLower = content.toLowerCase();
 
     // Extract @type values
-    const typeRegex = /"@type"\s*:\s*"([^"]+)"/g;
+    const typeRegex = /"@type"\s*:\s*"([^"]+)"/gi;
     let typeMatch;
     while ((typeMatch = typeRegex.exec(content)) !== null) {
-      signals.jsonLdTypes.push(typeMatch[1]);
+      const schemaType = typeMatch[1];
+      if (!signals.jsonLdTypes.includes(schemaType.toLowerCase())) {
+        signals.jsonLdTypes.push(schemaType.toLowerCase());
+      }
     }
 
     // Check for LocalBusiness variants
-    if (content.includes('localbusiness') ||
-        content.includes('plumber') ||
-        content.includes('electrician') ||
-        content.includes('hvacbusiness') ||
-        content.includes('homeandconstructionbusiness') ||
-        content.includes('professionalservice') ||
-        content.includes('localservice')) {
+    if (contentLower.includes('localbusiness') ||
+        contentLower.includes('plumber') ||
+        contentLower.includes('electrician') ||
+        contentLower.includes('hvacbusiness') ||
+        contentLower.includes('homeandconstructionbusiness') ||
+        contentLower.includes('professionalservice') ||
+        contentLower.includes('localservice')) {
       signals.hasLocalBusinessSchema = true;
+      signals.schemaDetails.push('LocalBusiness or variant detected');
     }
 
     // Check for Organization
-    if (content.includes('"organization"') || content.includes('"@type":"organization"')) {
+    if (contentLower.includes('"organization"')) {
       signals.hasOrganizationSchema = true;
+      signals.schemaDetails.push('Organization schema detected');
+    }
+
+    // Check for Service schema
+    if (contentLower.includes('"service"') || contentLower.includes('"offer"') || contentLower.includes('"product"')) {
+      signals.hasServiceSchema = true;
+      signals.schemaDetails.push('Service/Offer schema detected');
     }
   }
 
-  // Extract body text for analysis (strip HTML)
+  // Extract body text for analysis
   const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
   if (bodyMatch) {
     const bodyHtml = bodyMatch[1];
-    // Remove script and style content
     const cleanBody = bodyHtml
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -338,8 +374,25 @@ async function extractSignals(html: string, siteUrl: string, finalUrl: string, s
 
   // Check for geo keywords in key areas
   const keyContent = (signals.title + ' ' + signals.h1Text + ' ' + signals.metaDescription + ' ' + signals.h2s.join(' ')).toLowerCase();
-  signals.hasGeoKeywords = GEO_TERMS.some(term => keyContent.includes(term.toLowerCase()));
-  signals.hasServiceKeywords = SERVICE_TERMS.some(term => keyContent.includes(term.toLowerCase()));
+  const bodyLower = signals.bodyText.toLowerCase();
+
+  for (const term of GEO_TERMS) {
+    if (keyContent.includes(term.toLowerCase()) || bodyLower.includes(term.toLowerCase())) {
+      if (!signals.geoTermsFound.includes(term)) {
+        signals.geoTermsFound.push(term);
+      }
+    }
+  }
+  signals.hasGeoKeywords = signals.geoTermsFound.length > 0;
+
+  for (const term of SERVICE_TERMS) {
+    if (keyContent.includes(term.toLowerCase())) {
+      if (!signals.serviceTermsFound.includes(term)) {
+        signals.serviceTermsFound.push(term);
+      }
+    }
+  }
+  signals.hasServiceKeywords = signals.serviceTermsFound.length > 0;
 
   // NAP Signals - Phone numbers
   const phoneRegex = /(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}|(?:\+44|0)[\s]?[0-9]{2,5}[\s]?[0-9]{3,4}[\s]?[0-9]{3,4}/g;
@@ -368,242 +421,388 @@ async function extractSignals(html: string, siteUrl: string, finalUrl: string, s
     }
   }
 
-  // Anchor texts
-  const anchorRegex = /<a[^>]*>([^<]+)<\/a>/gi;
-  let anchorMatch;
-  while ((anchorMatch = anchorRegex.exec(html)) !== null) {
-    const text = anchorMatch[1].trim();
-    if (text && text.length > 2 && text.length < 100) {
-      signals.anchorTexts.push(text);
-    }
-  }
-
   return signals;
 }
 
 // ============================================================
-// CHECK FUNCTIONS - Returns Issues
+// MULTI-PAGE CRAWLING
 // ============================================================
 
-function runChecks(signals: Signals): Issue[] {
-  const issues: Issue[] = [];
+async function crawlSite(homepageUrl: string): Promise<AuditContext> {
+  // Fetch homepage
+  const homepageResult = await fetchHtml(homepageUrl);
+  if (!homepageResult) {
+    throw new Error('Cannot fetch homepage');
+  }
 
-  // CRITICAL: Indexability blocked
-  if (signals.robotsNoindex) {
+  const homepage = extractSignals(homepageResult.html, homepageResult.finalUrl);
+  const crawledPages: PageSignals[] = [];
+
+  // Find service and location pages to crawl
+  const priorityLinks: string[] = [];
+  const otherLinks: string[] = [];
+
+  for (const link of homepage.internalLinks) {
+    const linkLower = link.toLowerCase();
+    const isServicePage = SERVICE_PAGE_INDICATORS.some(ind => linkLower.includes(ind));
+    const isLocationPage = LOCATION_PAGE_INDICATORS.some(ind => linkLower.includes(ind));
+
+    if (isServicePage || isLocationPage) {
+      priorityLinks.push(link);
+    } else if (!linkLower.includes('/blog') && !linkLower.includes('/news') &&
+               !linkLower.includes('/privacy') && !linkLower.includes('/terms') &&
+               !linkLower.includes('/cookie') && !linkLower.includes('/legal')) {
+      otherLinks.push(link);
+    }
+  }
+
+  // Crawl up to 3 additional pages (prioritize service/location pages)
+  const pagesToCrawl = [...priorityLinks, ...otherLinks].slice(0, 3);
+
+  for (const pageUrl of pagesToCrawl) {
+    const result = await fetchHtml(pageUrl);
+    if (result) {
+      const signals = extractSignals(result.html, result.finalUrl);
+      crawledPages.push(signals);
+    }
+  }
+
+  return {
+    homepage,
+    crawledPages,
+    allPages: [homepage, ...crawledPages],
+  };
+}
+
+// ============================================================
+// AUDIT RULES ENGINE
+// ============================================================
+
+function runAuditRules(ctx: AuditContext): Issue[] {
+  const issues: Issue[] = [];
+  const hp = ctx.homepage;
+
+  // ============================================================
+  // CRITICAL ISSUES
+  // ============================================================
+
+  // Robots noindex
+  if (hp.robotsNoindex) {
     issues.push({
-      title: 'Page Blocked from Indexing',
+      title: 'Homepage Blocked from Indexing',
       priority: 'critical',
-      evidence: 'Found <meta name="robots" content="noindex"> - search engines and AI will NOT index this page',
-      impact: 'Your page is completely invisible to search engines and AI assistants. No traffic can come from search.',
-      recommendation: 'Remove the noindex directive immediately unless this is intentional for a staging/private page.',
+      evidence: 'Found <meta name="robots" content="noindex"> on homepage',
+      impact: 'Your homepage is invisible to search engines and AI. Zero organic traffic possible.',
+      recommendation: 'Remove the noindex directive immediately unless intentional.',
     });
   }
 
-  // CRITICAL: Missing title
-  if (!signals.title || signals.title.length < 10) {
+  // Missing or invalid title
+  if (!hp.title || hp.title.length < 10) {
     issues.push({
       title: 'Missing or Invalid Page Title',
       priority: 'critical',
-      evidence: signals.title
-        ? `Title found: "${signals.title}" (${signals.title.length} characters - too short)`
-        : 'No <title> tag found in the HTML',
-      impact: 'The title is the #1 ranking signal. Without a proper title, search engines and AI cannot understand or rank your page.',
-      recommendation: 'Add a descriptive title (50-60 chars) with your primary service and location, e.g., "Emergency Plumber in North London | 24/7 Service | CompanyName"',
+      evidence: hp.title ? `Title: "${hp.title}" (${hp.title.length} chars - too short)` : 'No <title> tag found',
+      impact: 'Title is the #1 ranking factor. Without it, search engines cannot rank your page.',
+      recommendation: 'Add a 50-60 character title: "[Service] in [City] | [Brand]"',
     });
   }
 
-  // CRITICAL: Missing H1
-  if (signals.h1Count === 0) {
+  // Missing H1
+  if (hp.h1Count === 0) {
     issues.push({
       title: 'Missing H1 Heading',
       priority: 'critical',
-      evidence: 'No <h1> tag found on the page',
-      impact: 'The H1 is the primary heading that tells AI what this page is about. Without it, AI cannot accurately categorize or cite your page.',
-      recommendation: 'Add a single H1 heading that states your main service and location, e.g., <h1>Professional Plumbing Services in Manchester</h1>',
+      evidence: 'No <h1> tag found on homepage',
+      impact: 'H1 tells AI what your page is about. Without it, AI cannot categorize or recommend you.',
+      recommendation: 'Add one H1: "<h1>Professional [Service] in [City]</h1>"',
     });
   }
 
-  // CRITICAL: No schema markup
-  if (!signals.hasLocalBusinessSchema && !signals.hasOrganizationSchema) {
-    issues.push({
-      title: 'Missing Business Schema Markup',
-      priority: 'critical',
-      evidence: signals.jsonLdTypes.length > 0
-        ? `Found schema types: ${signals.jsonLdTypes.join(', ')} - but no LocalBusiness or Organization`
-        : 'No JSON-LD structured data found on the page',
-      impact: 'Structured data tells AI exactly what your business is, where you operate, and how to contact you. Without it, AI assistants cannot recommend you accurately.',
-      recommendation: 'Add JSON-LD LocalBusiness schema with: @type, name, address, telephone, areaServed, priceRange, and openingHours.',
-    });
-  }
-
-  // HIGH: Thin content
-  if (signals.wordCount < 300) {
-    issues.push({
-      title: 'Critically Thin Content',
-      priority: 'critical',
-      evidence: `Page has only ${signals.wordCount} words (minimum recommended: 500 words)`,
-      impact: 'AI engines need substantial content to understand your expertise and cite you. Pages under 300 words are rarely shown in AI responses.',
-      recommendation: 'Expand content to 800+ words. Add: detailed service descriptions, FAQs, service areas, pricing info, and expertise statements.',
-    });
-  } else if (signals.wordCount < 500) {
-    issues.push({
-      title: 'Limited Content Depth',
-      priority: 'high',
-      evidence: `Page has ${signals.wordCount} words (recommended: 800+ words)`,
-      impact: 'Comprehensive content outperforms thin pages in both search and AI citations.',
-      recommendation: 'Add more detail: FAQs, process explanations, service area specifics, testimonials context.',
-    });
-  }
-
-  // HIGH: Missing meta description
-  if (!signals.metaDescription || signals.metaDescription.length < 50) {
-    issues.push({
-      title: 'Missing or Weak Meta Description',
-      priority: 'high',
-      evidence: signals.metaDescription
-        ? `Meta description: "${signals.metaDescription.substring(0, 80)}..." (${signals.metaDescription.length} chars - too short)`
-        : 'No meta description found',
-      impact: 'The meta description is your elevator pitch. AI uses it to understand page intent and users see it in search results.',
-      recommendation: 'Write a 150-160 character description: [Service] in [Location]. [Unique value prop]. [Call to action]. [Contact method].',
-    });
-  }
-
-  // HIGH: No geo targeting
-  if (!signals.hasGeoKeywords) {
-    issues.push({
-      title: 'No Geographic Targeting',
-      priority: 'high',
-      evidence: 'No location keywords found in title, H1, H2s, or meta description',
-      impact: 'Local businesses must signal their service area. AI cannot recommend you for local queries without location signals.',
-      recommendation: 'Add your city/area to the title and H1. Create location-specific content mentioning neighborhoods and service areas.',
-    });
-  }
-
-  // HIGH: Multiple or missing H1s
-  if (signals.h1Count > 1) {
+  // Multiple H1s
+  if (hp.h1Count > 1) {
     issues.push({
       title: 'Multiple H1 Headings',
       priority: 'high',
-      evidence: `Found ${signals.h1Count} H1 tags on the page - should only have one`,
-      impact: 'Multiple H1s dilute the page focus and confuse search engines about the primary topic.',
-      recommendation: 'Keep only one H1 for the main topic. Convert other H1s to H2s for subtopics.',
+      evidence: `Found ${hp.h1Count} H1 tags - should only have one`,
+      impact: 'Multiple H1s dilute focus and confuse search engines about the primary topic.',
+      recommendation: 'Keep only one H1 for the main topic. Convert others to H2s.',
     });
   }
 
-  // HIGH: Missing NAP (for local businesses)
-  if (!signals.hasPhone && !signals.hasEmail) {
+  // Missing LocalBusiness schema
+  if (!hp.hasLocalBusinessSchema && !hp.hasOrganizationSchema) {
+    issues.push({
+      title: 'Missing Business Schema Markup',
+      priority: 'critical',
+      evidence: hp.jsonLdTypes.length > 0
+        ? `Found: ${hp.jsonLdTypes.join(', ')} - but no LocalBusiness/Organization`
+        : 'No JSON-LD structured data found',
+      impact: 'Schema tells AI exactly what your business does and where. Critical for local visibility.',
+      recommendation: 'Add LocalBusiness JSON-LD with: name, address, phone, areaServed, openingHours.',
+    });
+  }
+
+  // Missing Service schema
+  if (!hp.hasServiceSchema && hp.hasLocalBusinessSchema) {
+    issues.push({
+      title: 'Missing Service Schema',
+      priority: 'high',
+      evidence: 'LocalBusiness found but no Service/Offer schema',
+      impact: 'Service schema helps AI understand exactly what services you provide.',
+      recommendation: 'Add Service schema for each main service with name, description, areaServed.',
+    });
+  }
+
+  // Critically thin content
+  if (hp.wordCount < 300) {
+    issues.push({
+      title: 'Critically Thin Homepage Content',
+      priority: 'critical',
+      evidence: `Only ${hp.wordCount} words on homepage (minimum: 500, recommended: 800+)`,
+      impact: 'AI needs substantial content to understand your expertise. Thin pages rarely get cited.',
+      recommendation: 'Expand to 800+ words: service descriptions, process, FAQs, service areas.',
+    });
+  } else if (hp.wordCount < 500) {
+    issues.push({
+      title: 'Limited Homepage Content',
+      priority: 'high',
+      evidence: `${hp.wordCount} words on homepage (recommended: 800+)`,
+      impact: 'Comprehensive content outperforms thin pages in both search and AI citations.',
+      recommendation: 'Add: detailed service breakdowns, FAQs, testimonials context, expertise proof.',
+    });
+  }
+
+  // ============================================================
+  // HIGH PRIORITY ISSUES
+  // ============================================================
+
+  // Missing or weak meta description
+  if (!hp.metaDescription) {
+    issues.push({
+      title: 'Missing Meta Description',
+      priority: 'high',
+      evidence: 'No meta description found on homepage',
+      impact: 'Meta description is your search result pitch. AI uses it to understand intent.',
+      recommendation: 'Add 150-160 char description: "[Service] in [City]. [Value prop]. Call [phone]."',
+    });
+  } else if (hp.metaDescription.length < 100) {
+    issues.push({
+      title: 'Meta Description Too Short',
+      priority: 'high',
+      evidence: `Meta description is ${hp.metaDescription.length} chars (optimal: 150-160)`,
+      impact: 'Short descriptions waste SERP real estate and miss keyword opportunities.',
+      recommendation: 'Expand to 150-160 chars with service, location, and call-to-action.',
+    });
+  }
+
+  // No geographic targeting in title
+  const titleLower = hp.title.toLowerCase();
+  const hasGeoInTitle = GEO_TERMS.some(term => titleLower.includes(term.toLowerCase()));
+  if (hp.title && !hasGeoInTitle) {
+    issues.push({
+      title: 'Title Missing City/Location Modifier',
+      priority: 'high',
+      evidence: `Title "${hp.title}" has no location keywords`,
+      impact: 'Local businesses must signal service area in title. AI cannot recommend for local queries.',
+      recommendation: 'Add city to title: "Emergency Plumber in [City] | Company Name"',
+    });
+  }
+
+  // No geo keywords anywhere
+  if (!hp.hasGeoKeywords) {
+    issues.push({
+      title: 'No Geographic Targeting',
+      priority: 'high',
+      evidence: 'No location terms found in title, H1, meta, or H2s',
+      impact: 'Local businesses must signal service area. AI cannot recommend without location context.',
+      recommendation: 'Add city/area to title, H1, and throughout content. Create location pages.',
+    });
+  }
+
+  // Missing contact info
+  if (!hp.hasPhone && !hp.hasEmail) {
     issues.push({
       title: 'No Contact Information Visible',
       priority: 'high',
-      evidence: 'No phone number or email address detected on the page',
-      impact: 'Contact info is essential for local SEO and builds trust. AI may not recommend businesses without clear contact methods.',
-      recommendation: 'Add your phone number and email prominently. Include them in the header/footer and on a dedicated contact section.',
+      evidence: 'No phone number or email detected on homepage',
+      impact: 'Contact info is essential for local SEO and trust. AI may not recommend without it.',
+      recommendation: 'Add phone and email prominently in header, footer, and contact section.',
     });
   }
 
-  // MEDIUM: Weak internal linking
-  if (signals.internalLinkCount < 5) {
+  // Insufficient internal links
+  if (hp.internalLinkCount < 10) {
     issues.push({
       title: 'Insufficient Internal Linking',
-      priority: 'medium',
-      evidence: `Only ${signals.internalLinkCount} internal links found (recommended: 10+)`,
-      impact: 'Internal links help search engines discover content and understand site structure. They also keep users engaged.',
-      recommendation: 'Add links to: service pages, area pages, about, contact, FAQs, blog posts. Each page should link to 10+ other pages.',
+      priority: 'high',
+      evidence: `Only ${hp.internalLinkCount} internal links (recommended: 10+)`,
+      impact: 'Internal links help search engines discover content and distribute authority.',
+      recommendation: 'Add links to: all services, location pages, about, contact, FAQs.',
     });
   }
 
-  // MEDIUM: No service keywords
-  if (!signals.hasServiceKeywords) {
+  // No service keywords on homepage
+  if (!hp.hasServiceKeywords) {
     issues.push({
-      title: 'Weak Service Keyword Usage',
-      priority: 'medium',
-      evidence: 'No clear service keywords found in key page elements (title, H1, H2s, meta)',
-      impact: 'AI needs to understand what services you offer to recommend you for relevant queries.',
-      recommendation: 'Include specific service terms in your headings: "Emergency Plumbing", "Drain Cleaning", "Boiler Repair", etc.',
+      title: 'No Service Keywords on Homepage',
+      priority: 'high',
+      evidence: 'No clear service terms found in title, H1, H2s, or meta',
+      impact: 'AI needs to understand what services you offer to recommend you.',
+      recommendation: 'Include specific services in headings: "Emergency Plumbing", "Drain Cleaning", etc.',
     });
   }
 
-  // MEDIUM: Flat heading structure
-  if (signals.h1Count > 0 && signals.h2s.length === 0) {
+  // ============================================================
+  // MEDIUM PRIORITY ISSUES
+  // ============================================================
+
+  // Images missing alt text
+  if (hp.imageCount > 0) {
+    const missingAltCount = hp.imageCount - hp.imagesWithAlt;
+    const altCoverage = Math.round((hp.imagesWithAlt / hp.imageCount) * 100);
+
+    if (missingAltCount > 0) {
+      issues.push({
+        title: 'Images Missing Alt Text',
+        priority: missingAltCount > 5 ? 'high' : 'medium',
+        evidence: `${missingAltCount} of ${hp.imageCount} images lack alt text (${altCoverage}% coverage). Missing: ${hp.imagesMissingAlt.slice(0, 3).join(', ')}${hp.imagesMissingAlt.length > 3 ? '...' : ''}`,
+        impact: 'Alt text helps AI understand images and improves accessibility. Missing alts hurt rankings.',
+        recommendation: 'Add descriptive alt text to all images: alt="[Service] technician in [City]"',
+      });
+    }
+  }
+
+  // Flat heading structure
+  if (hp.h1Count > 0 && hp.h2s.length === 0) {
     issues.push({
       title: 'Flat Heading Structure',
       priority: 'medium',
-      evidence: `Found H1 but no H2 subheadings (${signals.h3s.length} H3s found)`,
-      impact: 'A proper H1→H2→H3 hierarchy helps AI parse page sections and extract specific information.',
-      recommendation: 'Add H2 headings for each major section: Services, About, Areas Served, FAQs, Contact.',
+      evidence: `Found H1 but no H2 subheadings (${hp.h3s.length} H3s found)`,
+      impact: 'H1→H2→H3 hierarchy helps AI parse sections and extract answers.',
+      recommendation: 'Add H2s for: Services, About Us, Service Areas, FAQs, Contact.',
     });
   }
 
-  // MEDIUM: Duplicate anchor text
+  // Repetitive anchor text
   const anchorCounts = new Map<string, number>();
-  signals.anchorTexts.forEach(t => {
-    const lower = t.toLowerCase();
-    anchorCounts.set(lower, (anchorCounts.get(lower) || 0) + 1);
+  hp.anchorTexts.forEach(t => {
+    const lower = t.toLowerCase().trim();
+    if (lower.length > 2) {
+      anchorCounts.set(lower, (anchorCounts.get(lower) || 0) + 1);
+    }
   });
   const duplicateAnchors = [...anchorCounts.entries()].filter(([_, count]) => count > 3);
   if (duplicateAnchors.length > 0) {
     issues.push({
       title: 'Repetitive Anchor Text',
       priority: 'medium',
-      evidence: `Overused anchors: ${duplicateAnchors.slice(0, 3).map(([text, count]) => `"${text}" (${count}x)`).join(', ')}`,
-      impact: 'Repetitive anchor text looks spammy and wastes opportunities to use varied, descriptive links.',
-      recommendation: 'Vary your anchor text to be descriptive: "our plumbing services" instead of "click here" repeated.',
+      evidence: `Overused: ${duplicateAnchors.slice(0, 3).map(([t, c]) => `"${t}" (${c}x)`).join(', ')}`,
+      impact: 'Repetitive anchors look spammy and waste descriptive link opportunities.',
+      recommendation: 'Vary anchor text: "plumbing services", "our drain cleaning", "emergency repairs".',
     });
   }
 
-  // MEDIUM: Missing address for local business
-  if (signals.hasLocalBusinessSchema && !signals.hasAddress) {
+  // Missing canonical
+  if (!hp.canonicalUrl) {
     issues.push({
-      title: 'No Physical Address Displayed',
+      title: 'Missing Canonical Tag',
       priority: 'medium',
-      evidence: 'LocalBusiness schema detected but no street address found on page',
-      impact: 'Physical address reinforces local relevance and is required for Google Business Profile alignment.',
-      recommendation: 'Display your full business address on the page, especially in the footer and contact section.',
+      evidence: 'No <link rel="canonical"> found on homepage',
+      impact: 'Canonical tags prevent duplicate content issues and consolidate ranking signals.',
+      recommendation: 'Add <link rel="canonical" href="https://yourdomain.com/"> to <head>.',
     });
   }
 
-  // LOW: Title length optimization
-  if (signals.title && (signals.title.length < 30 || signals.title.length > 65)) {
+  // NAP consistency check across pages
+  if (ctx.crawledPages.length > 0) {
+    const homepagePhone = hp.phoneNumbers[0];
+    const inconsistentNAP = ctx.crawledPages.some(page =>
+      page.hasPhone && page.phoneNumbers[0] && page.phoneNumbers[0] !== homepagePhone
+    );
+    if (inconsistentNAP) {
+      issues.push({
+        title: 'Inconsistent NAP Information',
+        priority: 'medium',
+        evidence: 'Different phone numbers found across pages',
+        impact: 'Inconsistent Name, Address, Phone confuses search engines and hurts local rankings.',
+        recommendation: 'Ensure identical NAP on every page. Use schema markup consistently.',
+      });
+    }
+  }
+
+  // Thin service/location pages
+  for (const page of ctx.crawledPages) {
+    if ((page.isServicePage || page.isLocationPage) && page.wordCount < 300) {
+      issues.push({
+        title: `Thin ${page.isServicePage ? 'Service' : 'Location'} Page`,
+        priority: 'medium',
+        evidence: `${page.url.split('/').pop() || page.url} has only ${page.wordCount} words`,
+        impact: 'Service and location pages need depth to rank. Thin pages get ignored.',
+        recommendation: 'Expand to 500+ words: service details, process, pricing, FAQs, testimonials.',
+      });
+    }
+  }
+
+  // ============================================================
+  // LOW PRIORITY ISSUES
+  // ============================================================
+
+  // Title length optimization
+  if (hp.title && (hp.title.length < 30 || hp.title.length > 65)) {
     issues.push({
       title: 'Suboptimal Title Length',
       priority: 'low',
-      evidence: `Title is ${signals.title.length} characters (optimal: 50-60)`,
-      impact: 'Titles under 30 chars underuse available space. Over 65 chars get truncated in search results.',
-      recommendation: 'Adjust title to 50-60 characters to maximize visibility and click-through.',
+      evidence: `Title is ${hp.title.length} chars (optimal: 50-60)`,
+      impact: 'Short titles underuse space. Long titles get truncated in search results.',
+      recommendation: 'Adjust to 50-60 characters for full display.',
     });
   }
 
-  // LOW: Meta description length optimization
-  if (signals.metaDescription && (signals.metaDescription.length < 120 || signals.metaDescription.length > 165)) {
+  // Meta description length
+  if (hp.metaDescription && hp.metaDescription.length > 160) {
     issues.push({
-      title: 'Suboptimal Meta Description Length',
+      title: 'Meta Description Too Long',
       priority: 'low',
-      evidence: `Meta description is ${signals.metaDescription.length} characters (optimal: 150-160)`,
-      impact: 'Short descriptions waste SERP real estate. Long ones get truncated.',
-      recommendation: 'Adjust to 150-160 characters for full display in search results.',
+      evidence: `Meta description is ${hp.metaDescription.length} chars (will be truncated at ~160)`,
+      impact: 'Truncated descriptions may cut off your call-to-action.',
+      recommendation: 'Trim to 150-160 characters, ending with CTA.',
     });
   }
 
-  // LOW: Missing canonical
-  if (!signals.canonicalUrl) {
-    issues.push({
-      title: 'Missing Canonical Tag',
-      priority: 'low',
-      evidence: 'No <link rel="canonical"> found',
-      impact: 'Canonical tags prevent duplicate content issues and consolidate ranking signals.',
-      recommendation: 'Add <link rel="canonical" href="https://yourdomain.com/page-url"> to the <head>.',
-    });
-  }
-
-  // LOW: Few H2s
-  if (signals.h2s.length > 0 && signals.h2s.length < 3 && signals.wordCount > 500) {
+  // Few H2 subheadings
+  if (hp.h2s.length > 0 && hp.h2s.length < 4 && hp.wordCount > 500) {
     issues.push({
       title: 'Limited Subheadings',
       priority: 'low',
-      evidence: `Only ${signals.h2s.length} H2 subheadings for ${signals.wordCount} words`,
-      impact: 'More subheadings improve scannability and help AI extract specific sections.',
-      recommendation: 'Add an H2 every 200-300 words to break up content into logical sections.',
+      evidence: `Only ${hp.h2s.length} H2s for ${hp.wordCount} words of content`,
+      impact: 'More subheadings improve scannability and help AI extract sections.',
+      recommendation: 'Add H2 every 200-300 words for major sections.',
     });
+  }
+
+  // Missing address with LocalBusiness
+  if (hp.hasLocalBusinessSchema && !hp.hasAddress) {
+    issues.push({
+      title: 'No Physical Address Displayed',
+      priority: 'low',
+      evidence: 'LocalBusiness schema found but no street address visible on page',
+      impact: 'Physical address reinforces local relevance for both users and search engines.',
+      recommendation: 'Display full address in footer and contact section.',
+    });
+  }
+
+  // Pages missing H1
+  for (const page of ctx.crawledPages) {
+    if (page.h1Count === 0) {
+      issues.push({
+        title: `Crawled Page Missing H1`,
+        priority: 'medium',
+        evidence: `${page.url.split('/').pop() || page.url} has no H1 heading`,
+        impact: 'Every page needs an H1 to tell search engines its topic.',
+        recommendation: 'Add descriptive H1 to each page.',
+      });
+    }
   }
 
   return issues;
@@ -613,13 +812,14 @@ function runChecks(signals: Signals): Issue[] {
 // SCORING
 // ============================================================
 
-function scoreSite(issues: Issue[]): number {
+function calculateScore(issues: Issue[]): number {
   let score = 100;
 
   for (const issue of issues) {
     score -= WEIGHTS[issue.priority] || 0;
   }
 
+  // Ensure score stays within 0-100
   return Math.max(0, Math.min(100, score));
 }
 
@@ -628,31 +828,29 @@ function scoreSite(issues: Issue[]): number {
 // ============================================================
 
 async function runAudit(siteUrl: string): Promise<AuditResponse> {
-  // Fetch the HTML
-  const { html, finalUrl, status } = await fetchHtml(siteUrl);
-
-  if (status >= 400) {
-    throw new Error(`HTTP ${status} - Cannot access page`);
+  // Normalize URL
+  if (!siteUrl.startsWith('http')) {
+    siteUrl = 'https://' + siteUrl;
   }
 
-  // Extract signals from the HTML
-  const signals = await extractSignals(html, siteUrl, finalUrl, status);
+  // Crawl the site
+  const ctx = await crawlSite(siteUrl);
 
-  // Run all checks
-  const allIssues = runChecks(signals);
+  // Run audit rules
+  const allIssues = runAuditRules(ctx);
 
   // Calculate score
-  const score = scoreSite(allIssues);
+  const score = calculateScore(allIssues);
 
   // Sort by priority for top issues
-  const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+  const priorityOrder: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
   const sortedIssues = [...allIssues].sort((a, b) =>
     priorityOrder[a.priority] - priorityOrder[b.priority]
   );
 
   // Build response
   return {
-    siteUrl: finalUrl,
+    siteUrl: ctx.homepage.url,
     score,
     topIssues: sortedIssues.slice(0, 3),
     issuesByPriority: {
@@ -802,7 +1000,6 @@ const HTML_UI = `<!DOCTYPE html>
       display: block;
     }
 
-    /* Score Card */
     .score-card {
       display: flex;
       align-items: center;
@@ -883,7 +1080,6 @@ const HTML_UI = `<!DOCTYPE html>
     .badge-warn { background: var(--high-bg); color: var(--high); }
     .badge-bad { background: var(--critical-bg); color: var(--critical); }
 
-    /* Section Headers */
     .section {
       margin-bottom: 2rem;
     }
@@ -897,7 +1093,6 @@ const HTML_UI = `<!DOCTYPE html>
       gap: 0.5rem;
     }
 
-    /* Issue Cards */
     .issue-card {
       background: var(--card);
       border: 1px solid var(--border);
@@ -975,7 +1170,6 @@ const HTML_UI = `<!DOCTYPE html>
       color: var(--success);
     }
 
-    /* Expandable Sections */
     details {
       margin-bottom: 1rem;
     }
@@ -1046,13 +1240,39 @@ const HTML_UI = `<!DOCTYPE html>
       padding: 0.5rem 0;
     }
 
-    /* Responsive */
+    .summary-stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .stat-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1rem;
+      text-align: center;
+    }
+
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+    }
+
+    .stat-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
     @media (max-width: 640px) {
       .container { padding: 1.5rem 1rem; }
       h1 { font-size: 1.75rem; }
       .input-section { flex-direction: column; }
       .score-card { flex-direction: column; text-align: center; }
       .score-info { text-align: center; }
+      .summary-stats { grid-template-columns: repeat(2, 1fr); }
     }
   </style>
 </head>
@@ -1087,6 +1307,25 @@ const HTML_UI = `<!DOCTYPE html>
           <h2 id="scoreStatus">Analyzing...</h2>
           <div class="score-url" id="siteUrl"></div>
           <span class="score-badge" id="scoreBadge"></span>
+        </div>
+      </div>
+
+      <div class="summary-stats">
+        <div class="stat-card">
+          <div class="stat-value" id="totalIssues" style="color: var(--critical)">0</div>
+          <div class="stat-label">Total Issues</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="criticalStat" style="color: var(--critical)">0</div>
+          <div class="stat-label">Critical</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="highStat" style="color: var(--high)">0</div>
+          <div class="stat-label">High</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="mediumStat" style="color: var(--medium)">0</div>
+          <div class="stat-label">Medium</div>
         </div>
       </div>
 
@@ -1180,7 +1419,7 @@ const HTML_UI = `<!DOCTYPE html>
 
       $('analyzeBtn').disabled = true;
       $('status').className = 'status';
-      $('status').textContent = 'Fetching and analyzing page...';
+      $('status').textContent = 'Fetching and analyzing site (this may take 10-15 seconds)...';
       $('results').classList.remove('visible');
 
       try {
@@ -1215,11 +1454,18 @@ const HTML_UI = `<!DOCTYPE html>
         // Update URL
         $('siteUrl').textContent = data.siteUrl;
 
+        // Update summary stats
+        const counts = data.issuesByPriority;
+        const total = counts.critical.length + counts.high.length + counts.medium.length + counts.low.length;
+        $('totalIssues').textContent = total;
+        $('criticalStat').textContent = counts.critical.length;
+        $('highStat').textContent = counts.high.length;
+        $('mediumStat').textContent = counts.medium.length;
+
         // Update top issues
         $('topIssues').innerHTML = data.topIssues.map(i => renderIssueCard(i)).join('');
 
         // Update issue counts and lists
-        const counts = data.issuesByPriority;
         $('criticalCount').textContent = counts.critical.length;
         $('highCount').textContent = counts.high.length;
         $('mediumCount').textContent = counts.medium.length;
