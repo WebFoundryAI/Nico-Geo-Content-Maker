@@ -294,7 +294,7 @@ export function extractGapFlags(gaps: PageGapAnalysis): string[] {
   const flags: string[] = [];
 
   for (const gap of gaps.gaps) {
-    flags.push(gap.flag);
+    flags.push(gap.type);
   }
 
   return flags;

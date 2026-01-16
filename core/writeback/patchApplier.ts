@@ -237,14 +237,8 @@ function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, char => entities[char] || char);
 }
 
-/**
- * Suggested schema type (re-exported for convenience).
- */
-export interface SuggestedSchema {
-  '@context': 'https://schema.org';
-  '@type': string;
-  [key: string]: unknown;
-}
+// Re-export SuggestedSchema from improvementPlanner for convenience
+export type { SuggestedSchema } from '../analyze/improvementPlanner';
 
 /**
  * A planned file change.
@@ -737,9 +731,6 @@ export async function applyPlannedPatches(
 
   return result;
 }
-
-// Legacy exports for backwards compatibility
-export type { PathMapping as LegacyPathMapping } from './pathContract';
 
 export interface PathMapping {
   urlPath: string;
