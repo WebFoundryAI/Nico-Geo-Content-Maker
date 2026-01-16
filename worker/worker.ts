@@ -1827,12 +1827,12 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   }
 
   // ============================================
-  // ROUTE: GET / (Audit UI)
+  // ROUTE: GET / (Audit UI) - MUST BE FIRST
   // ============================================
   if (url.pathname === '/' && request.method === 'GET') {
     return new Response(AUDIT_UI_HTML, {
       status: 200,
-      headers: { 'Content-Type': 'text/html; charset=utf-8', ...CORS_HEADERS },
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
   }
 
