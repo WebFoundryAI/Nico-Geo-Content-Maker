@@ -5,11 +5,14 @@
   "private": true,
   "scripts": {
     "run:geo": "ts-node scripts/runGeoPipeline.ts",
-    "test:smoke": "ts-node scripts/ciSmoke.ts"
+    "test:smoke": "ts-node scripts/ciSmoke.ts",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
   },
   "devDependencies": {
     "@types/node": "^25.0.9",
     "ts-node": "^10.9.2",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "wrangler": "^3.99.0"
   }
 }
