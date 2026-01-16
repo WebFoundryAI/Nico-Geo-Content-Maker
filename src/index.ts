@@ -564,6 +564,22 @@ function runAuditRules(ctx: AuditContext): Issue[] {
     });
   }
 
+  // H1 lacks geo + service modifiers
+  if (hp.h1Text) {
+    const h1Lower = hp.h1Text.toLowerCase();
+    const h1HasGeo = GEO_CITY_TERMS.some(term => h1Lower.includes(term.toLowerCase()));
+    const h1HasService = SERVICE_INDUSTRY_TERMS.some(term => h1Lower.includes(term.toLowerCase()));
+    if (!h1HasGeo || !h1HasService) {
+      issues.push({
+        title: 'H1 Lacks Geo + Service Modifiers',
+        priority: 'medium',
+        evidence: `H1 text: "${hp.h1Text}"${!h1HasGeo ? ' - missing location' : ''}${!h1HasService ? ' - missing service keyword' : ''}`,
+        impact: 'Limits geo relevance for AI and local search.',
+        recommendation: 'Include primary service + city in the H1: "Professional [Service] in [City]"',
+      });
+    }
+  }
+
   // Missing LocalBusiness schema
   if (!hp.hasLocalBusinessSchema && !hp.hasOrganizationSchema) {
     issues.push({
