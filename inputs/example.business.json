@@ -1,0 +1,16 @@
+{
+  "business": {
+    "name": "Example Service Company"
+  },
+  "location": {
+    "primaryCity": "Example City",
+    "country": "Example Country",
+    "serviceAreas": ["Example Area 1", "Example Area 2"]
+  },
+  "services": {
+    "primary": ["Example Service"]
+  },
+  "constraints": {
+    "noHallucinations": true
+  }
+}

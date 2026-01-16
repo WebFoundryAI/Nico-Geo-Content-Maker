@@ -1,0 +1,13 @@
+{
+  "name": "nico-geo-content-maker",
+  "version": "0.1.0",
+  "description": "GEO content generation engine",
+  "private": true,
+  "scripts": {
+    "run:geo": "ts-node scripts/runGeoPipeline.ts"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}
