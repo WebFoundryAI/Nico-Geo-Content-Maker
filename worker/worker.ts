@@ -1538,6 +1538,275 @@ async function handleReviewRoutes(
 }
 
 /**
+ * HTML page for the GEO Audit UI.
+ */
+const AUDIT_UI_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GEO Audit</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #1a1a2e; line-height: 1.6; padding: 20px; }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 { font-size: 2rem; margin-bottom: 8px; color: #1a1a2e; }
+    .subtitle { color: #666; margin-bottom: 24px; }
+    .form-group { display: flex; gap: 12px; margin-bottom: 24px; }
+    input[type="url"] { flex: 1; padding: 12px 16px; font-size: 16px; border: 2px solid #ddd; border-radius: 8px; outline: none; transition: border-color 0.2s; }
+    input[type="url"]:focus { border-color: #4f46e5; }
+    button { padding: 12px 24px; font-size: 16px; font-weight: 600; background: #4f46e5; color: white; border: none; border-radius: 8px; cursor: pointer; transition: background 0.2s; }
+    button:hover { background: #4338ca; }
+    button:disabled { background: #9ca3af; cursor: not-allowed; }
+    .status { padding: 16px; background: #e0e7ff; border-radius: 8px; margin-bottom: 24px; display: none; }
+    .status.error { background: #fee2e2; color: #991b1b; }
+    .status.loading { display: block; }
+    .results { display: none; }
+    .results.visible { display: block; }
+    .section { background: white; border-radius: 12px; padding: 24px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .section h2 { font-size: 1.25rem; margin-bottom: 16px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb; }
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; }
+    .summary-item { text-align: center; padding: 16px; background: #f9fafb; border-radius: 8px; }
+    .summary-value { font-size: 2rem; font-weight: 700; color: #4f46e5; }
+    .summary-label { font-size: 0.875rem; color: #666; margin-top: 4px; }
+    .priority-list { list-style: none; }
+    .priority-item { padding: 16px; border: 1px solid #e5e7eb; border-radius: 8px; margin-bottom: 12px; }
+    .priority-header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+    .priority-badge { padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
+    .priority-critical { background: #fee2e2; color: #991b1b; }
+    .priority-high { background: #fef3c7; color: #92400e; }
+    .priority-medium { background: #e0e7ff; color: #3730a3; }
+    .priority-low { background: #f3f4f6; color: #374151; }
+    .priority-url { font-family: monospace; font-size: 0.875rem; color: #4f46e5; word-break: break-all; }
+    .priority-problem { font-weight: 600; margin: 8px 0 4px; }
+    .priority-why { color: #666; font-size: 0.875rem; margin-bottom: 8px; }
+    .priority-fix { background: #f0fdf4; padding: 12px; border-radius: 6px; font-size: 0.875rem; }
+    .priority-fix strong { color: #166534; }
+    .show-more { background: none; border: 2px solid #4f46e5; color: #4f46e5; margin-top: 8px; }
+    .show-more:hover { background: #4f46e5; color: white; }
+    .hidden-items { display: none; }
+    .hidden-items.visible { display: block; }
+    .footer { text-align: center; color: #666; font-size: 0.875rem; padding: 16px 0; }
+    .score-good { color: #059669; }
+    .score-ok { color: #d97706; }
+    .score-bad { color: #dc2626; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>GEO Audit</h1>
+    <p class="subtitle">Analyze your website for Generative Engine Optimization readiness</p>
+
+    <div class="form-group">
+      <input type="url" id="siteUrl" placeholder="https://example.com" required>
+      <button id="runAudit">Run Audit</button>
+    </div>
+
+    <div class="status" id="status">Running audit...</div>
+
+    <div class="results" id="results">
+      <div class="section">
+        <h2>Executive Summary</h2>
+        <div class="summary-grid" id="summaryGrid"></div>
+      </div>
+
+      <div class="section">
+        <h2>Top Priority Issues</h2>
+        <ul class="priority-list" id="priorityList"></ul>
+        <div class="hidden-items" id="hiddenItems"></div>
+        <button class="show-more" id="showMore" style="display:none;">Show More Issues</button>
+      </div>
+
+      <div class="section footer" id="footer"></div>
+    </div>
+  </div>
+
+  <script>
+    const INITIAL_DISPLAY = 5;
+    const ACTION_LABELS = {
+      add_answer_capsule: { problem: 'Missing Answer Capsule', why: 'AI engines prioritize pages with direct, concise answers that can be featured in AI responses.', fix: 'Add a clear, 2-3 sentence answer capsule near the top of the page that directly addresses the main query.' },
+      add_faq: { problem: 'Missing FAQ Section', why: 'Structured FAQ content helps AI engines understand and cite your expertise on common questions.', fix: 'Add a FAQ section with 3-5 relevant questions and clear answers using proper heading structure.' },
+      add_schema: { problem: 'Missing Schema Markup', why: 'Schema markup helps AI engines understand your content structure and increases citation likelihood.', fix: 'Implement LocalBusiness, Service, or FAQ schema markup appropriate to your page content.' },
+      improve_meta: { problem: 'Weak Title/Meta Description', why: 'Optimized meta content improves how AI engines summarize and present your pages.', fix: 'Write a compelling title (50-60 chars) and meta description (150-160 chars) that clearly state the page purpose.' },
+      increase_depth: { problem: 'Thin Content', why: 'AI engines favor comprehensive content that thoroughly covers a topic over shallow pages.', fix: 'Expand content to at least 800 words with detailed explanations, examples, and supporting information.' },
+      fix_internal_links: { problem: 'Poor Internal Linking', why: 'Strong internal links help AI engines understand your site structure and content relationships.', fix: 'Add 3-5 relevant internal links to related pages using descriptive anchor text.' }
+    };
+
+    function getPriorityClass(score) {
+      if (score >= 70) return 'priority-critical';
+      if (score >= 50) return 'priority-high';
+      if (score >= 30) return 'priority-medium';
+      return 'priority-low';
+    }
+
+    function getPriorityLabel(score) {
+      if (score >= 70) return 'Critical';
+      if (score >= 50) return 'High';
+      if (score >= 30) return 'Medium';
+      return 'Low';
+    }
+
+    function getScoreClass(score) {
+      if (score >= 70) return 'score-good';
+      if (score >= 40) return 'score-ok';
+      return 'score-bad';
+    }
+
+    function renderPriorityItem(item) {
+      const action = ACTION_LABELS[item.recommendedNextAction] || { problem: item.recommendedNextAction, why: 'This issue impacts your GEO readiness.', fix: 'Address the identified gap.' };
+      const priorityClass = getPriorityClass(item.totalScore);
+      const priorityLabel = getPriorityLabel(item.totalScore);
+      return \`
+        <li class="priority-item">
+          <div class="priority-header">
+            <span class="priority-badge \${priorityClass}">\${priorityLabel}</span>
+            <span class="priority-url">\${item.path}</span>
+          </div>
+          <div class="priority-problem">\${action.problem}</div>
+          <div class="priority-why">\${action.why}</div>
+          <div class="priority-fix"><strong>Recommended Fix:</strong> \${action.fix}</div>
+        </li>
+      \`;
+    }
+
+    async function runAudit() {
+      const urlInput = document.getElementById('siteUrl');
+      const btn = document.getElementById('runAudit');
+      const status = document.getElementById('status');
+      const results = document.getElementById('results');
+      const siteUrl = urlInput.value.trim();
+
+      if (!siteUrl) { alert('Please enter a URL'); return; }
+
+      btn.disabled = true;
+      status.className = 'status loading';
+      status.textContent = 'Running audit... This may take a minute.';
+      results.className = 'results';
+
+      try {
+        const res = await fetch('/ui/audit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ siteUrl })
+        });
+        const data = await res.json();
+
+        if (data.status === 'error') {
+          throw new Error(data.message || data.error || 'Audit failed');
+        }
+
+        const audit = data.results?.audit;
+        if (!audit) throw new Error('No audit results returned');
+
+        // Render summary
+        const scoreClass = getScoreClass(audit.averageGeoScore);
+        document.getElementById('summaryGrid').innerHTML = \`
+          <div class="summary-item"><div class="summary-value">\${audit.totalPages}</div><div class="summary-label">Pages Scanned</div></div>
+          <div class="summary-item"><div class="summary-value \${scoreClass}">\${Math.round(audit.averageGeoScore)}</div><div class="summary-label">GEO Score</div></div>
+          <div class="summary-item"><div class="summary-value" style="color:#dc2626">\${audit.criticalIssues}</div><div class="summary-label">Critical Issues</div></div>
+          <div class="summary-item"><div class="summary-value" style="color:#d97706">\${audit.warnings}</div><div class="summary-label">Warnings</div></div>
+        \`;
+
+        // Render priority items
+        const queue = audit.actionQueue || [];
+        const priorityList = document.getElementById('priorityList');
+        const hiddenItems = document.getElementById('hiddenItems');
+        const showMoreBtn = document.getElementById('showMore');
+
+        if (queue.length === 0) {
+          priorityList.innerHTML = '<li class="priority-item" style="text-align:center;color:#059669;">No major issues found. Your site has good GEO readiness!</li>';
+          hiddenItems.innerHTML = '';
+          showMoreBtn.style.display = 'none';
+        } else {
+          const visible = queue.slice(0, INITIAL_DISPLAY);
+          const hidden = queue.slice(INITIAL_DISPLAY);
+          priorityList.innerHTML = visible.map(renderPriorityItem).join('');
+
+          if (hidden.length > 0) {
+            hiddenItems.innerHTML = hidden.map(renderPriorityItem).join('');
+            showMoreBtn.style.display = 'block';
+            showMoreBtn.textContent = \`Show \${hidden.length} More Issues\`;
+          } else {
+            hiddenItems.innerHTML = '';
+            showMoreBtn.style.display = 'none';
+          }
+        }
+
+        // Render footer
+        document.getElementById('footer').innerHTML = \`
+          <div>Audited: <strong>\${audit.siteUrl}</strong></div>
+          <div>Completed: \${new Date().toLocaleString()}</div>
+        \`;
+
+        status.className = 'status';
+        results.className = 'results visible';
+
+      } catch (err) {
+        status.className = 'status error';
+        status.textContent = 'Error: ' + err.message;
+        status.style.display = 'block';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('runAudit').addEventListener('click', runAudit);
+    document.getElementById('siteUrl').addEventListener('keypress', (e) => { if (e.key === 'Enter') runAudit(); });
+    document.getElementById('showMore').addEventListener('click', function() {
+      const hidden = document.getElementById('hiddenItems');
+      hidden.classList.toggle('visible');
+      this.textContent = hidden.classList.contains('visible') ? 'Show Less' : this.textContent;
+    });
+  </script>
+</body>
+</html>`;
+
+/**
+ * Handles the UI audit endpoint (no auth required).
+ */
+async function handleUIAudit(request: Request): Promise<Response> {
+  try {
+    const body = await request.json() as { siteUrl?: string };
+    const siteUrl = body?.siteUrl;
+
+    if (!siteUrl || typeof siteUrl !== 'string') {
+      return new Response(JSON.stringify({ status: 'error', message: 'siteUrl is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      });
+    }
+
+    try {
+      new URL(siteUrl);
+    } catch {
+      return new Response(JSON.stringify({ status: 'error', message: 'Invalid URL format' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      });
+    }
+
+    const auditRequest: RunRequest = {
+      mode: 'audit',
+      siteUrl,
+      constraints: { noHallucinations: true },
+    };
+
+    const response = await handleAuditMode(auditRequest);
+
+    return new Response(JSON.stringify(response, null, 2), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Audit failed';
+    return new Response(JSON.stringify({ status: 'error', message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+    });
+  }
+}
+
+/**
  * Main request handler for the Worker.
  */
 async function handleRequest(request: Request, env: Env): Promise<Response> {
@@ -1555,6 +1824,23 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       status: 204,
       headers,
     });
+  }
+
+  // ============================================
+  // ROUTE: GET / (Audit UI)
+  // ============================================
+  if (url.pathname === '/' && request.method === 'GET') {
+    return new Response(AUDIT_UI_HTML, {
+      status: 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8', ...CORS_HEADERS },
+    });
+  }
+
+  // ============================================
+  // ROUTE: POST /ui/audit (UI audit endpoint, no auth)
+  // ============================================
+  if (url.pathname === '/ui/audit' && request.method === 'POST') {
+    return handleUIAudit(request);
   }
 
   // ============================================
