@@ -358,3 +358,174 @@ export type { ProjectType, RouteStrategy, PathContractConfig };
  * Re-export intelligence types for convenience.
  */
 export type { GscSnapshotRow, ScoreBreakdown, RecommendedAction };
+
+// ============================================
+// REVIEW SESSION TYPES (Baby Step 8D)
+// ============================================
+
+/**
+ * Status of a review session.
+ */
+export type ReviewSessionStatus = 'pending' | 'approved' | 'expired' | 'applied';
+
+/**
+ * A planned file in a review session (subset of PlannedFileChange).
+ */
+export interface ReviewPlannedFile {
+  url: string;
+  filePath: string;
+  action: 'create' | 'update' | 'no-op';
+  humanReviewRequired: boolean;
+  reviewNotes: string[];
+}
+
+/**
+ * Diff preview stored in a review session.
+ */
+export interface ReviewDiffPreview {
+  filePath: string;
+  action: 'create' | 'update' | 'no-op';
+  diff: string;
+  truncated: boolean;
+}
+
+/**
+ * Patch data stored in a review session (subset of improvement data).
+ */
+export interface ReviewPatch {
+  url: string;
+  filePath: string;
+  newContent: string;
+  originalContent: string | null;
+}
+
+/**
+ * Review session model.
+ * Stores improvement planning results for human review before write-back.
+ */
+export interface ReviewSession {
+  /** Unique session identifier (UUID) */
+  sessionId: string;
+  /** Creation timestamp (UTC ISO string) */
+  createdAt: string;
+  /** Expiration timestamp (UTC ISO string) */
+  expiresAt: string;
+  /** Mode - always 'improve' for review sessions */
+  mode: 'improve';
+  /** Target site URL */
+  siteUrl: string;
+  /** Selected target paths */
+  selectedTargets: string[];
+  /** Planned file changes (without content to save space) */
+  plannedFiles: ReviewPlannedFile[];
+  /** Unified diff previews */
+  diffPreviews: ReviewDiffPreview[];
+  /** Patch data for later application (stored separately) */
+  patches: ReviewPatch[];
+  /** Current status */
+  status: ReviewSessionStatus;
+  /** Commit SHAs if applied (populated after successful apply) */
+  commitShas?: string[];
+  /** Target repository configuration */
+  targetRepo: TargetRepoConfig;
+}
+
+/**
+ * Request body for POST /review/create.
+ */
+export interface ReviewCreateRequest {
+  /** Must be 'improve' */
+  mode: 'improve';
+  /** Target site URL */
+  siteUrl: string;
+  /** Constraints */
+  constraints: RunConstraints;
+  /** Target repository (required) */
+  targetRepo: TargetRepoConfig;
+  /** Write-back config (optional) */
+  writeBackConfig?: WriteBackConfig;
+  /** GSC snapshot (optional) */
+  gscSnapshot?: GscSnapshotRow[];
+  /** Target paths (optional) */
+  targetPaths?: string[];
+}
+
+/**
+ * Response from POST /review/create.
+ */
+export interface ReviewCreateResponse {
+  status: 'success';
+  sessionId: string;
+  expiresAt: string;
+  summary: {
+    siteUrl: string;
+    selectedTargets: string[];
+    plannedFilesCount: number;
+    filesRequiringReview: number;
+  };
+}
+
+/**
+ * Response from GET /review/{sessionId}.
+ */
+export interface ReviewGetResponse {
+  status: 'success';
+  session: {
+    sessionId: string;
+    createdAt: string;
+    expiresAt: string;
+    status: ReviewSessionStatus;
+    siteUrl: string;
+    selectedTargets: string[];
+    plannedFiles: ReviewPlannedFile[];
+    diffPreviews: ReviewDiffPreview[];
+    patchCount: number;
+    targetRepo: {
+      owner: string;
+      repo: string;
+      branch: string;
+    };
+    commitShas?: string[];
+  };
+}
+
+/**
+ * Response from POST /review/{sessionId}/approve.
+ */
+export interface ReviewApproveResponse {
+  status: 'success';
+  sessionId: string;
+  previousStatus: ReviewSessionStatus;
+  newStatus: ReviewSessionStatus;
+}
+
+/**
+ * Response from POST /review/{sessionId}/apply.
+ */
+export interface ReviewApplyResponse {
+  status: 'success';
+  sessionId: string;
+  applied: boolean;
+  commitShas: string[];
+  message: string;
+}
+
+/**
+ * Extended API error codes for review endpoints.
+ */
+export type ReviewApiErrorCode =
+  | ApiErrorCode
+  | 'SESSION_NOT_FOUND'
+  | 'SESSION_EXPIRED'
+  | 'SESSION_NOT_APPROVED'
+  | 'SESSION_ALREADY_APPLIED';
+
+/**
+ * Review-specific error response.
+ */
+export interface ReviewErrorResponse {
+  status: 'error';
+  errorCode: ReviewApiErrorCode;
+  message: string;
+  details?: Record<string, unknown>;
+}

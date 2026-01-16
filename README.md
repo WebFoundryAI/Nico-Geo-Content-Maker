@@ -186,3 +186,108 @@ Error codes:
 - `PLAN_REQUIRED` - Feature requires higher plan (403)
 - `VALIDATION_ERROR` - Request validation failed (400)
 - `INTERNAL_ERROR` - Server error (500)
+
+### Review Session API
+
+Review sessions enable human review of improvement plans before write-back to GitHub. This is the recommended workflow for safe deployments.
+
+#### Create Review Session
+
+```bash
+curl -X POST https://your-worker.workers.dev/review/create \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_KEY" \
+  -d '{
+    "mode": "improve",
+    "siteUrl": "https://example.com",
+    "constraints": { "noHallucinations": true },
+    "targetRepo": {
+      "owner": "your-org",
+      "repo": "your-site",
+      "branch": "main",
+      "projectType": "astro-pages",
+      "routeStrategy": "path-index"
+    }
+  }'
+```
+
+Response:
+
+```json
+{
+  "status": "success",
+  "sessionId": "abc12345-1234-4567-89ab-cdef01234567",
+  "expiresAt": "2024-01-16T12:00:00.000Z",
+  "summary": {
+    "siteUrl": "https://example.com",
+    "selectedTargets": ["/", "/services"],
+    "plannedFilesCount": 3,
+    "filesRequiringReview": 1
+  }
+}
+```
+
+#### Get Session Details
+
+```bash
+curl -X GET https://your-worker.workers.dev/review/{sessionId} \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+Returns session details including planned files, diff previews, and current status.
+
+#### Approve Session (Pro Plan Required)
+
+```bash
+curl -X POST https://your-worker.workers.dev/review/{sessionId}/approve \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+Response:
+
+```json
+{
+  "status": "success",
+  "sessionId": "abc12345-1234-4567-89ab-cdef01234567",
+  "previousStatus": "pending",
+  "newStatus": "approved"
+}
+```
+
+#### Apply Session (Pro Plan Required)
+
+```bash
+curl -X POST https://your-worker.workers.dev/review/{sessionId}/apply \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "X-GitHub-Token: $GITHUB_TOKEN"
+```
+
+Response:
+
+```json
+{
+  "status": "success",
+  "sessionId": "abc12345-1234-4567-89ab-cdef01234567",
+  "applied": true,
+  "commitShas": ["abc123", "def456"],
+  "message": "Successfully applied 2 patches"
+}
+```
+
+#### Review Session Error Codes
+
+Additional error codes for review endpoints:
+
+- `SESSION_NOT_FOUND` - Session ID not found (404)
+- `SESSION_EXPIRED` - Session has expired (410)
+- `SESSION_NOT_APPROVED` - Session must be approved before apply (400)
+- `SESSION_ALREADY_APPLIED` - Session was already applied (409)
+
+#### Session Lifecycle
+
+1. **Create**: `POST /review/create` creates a pending session (24h TTL)
+2. **Review**: `GET /review/{id}` to view diff previews and planned changes
+3. **Approve**: `POST /review/{id}/approve` marks session as approved (pro plan)
+4. **Apply**: `POST /review/{id}/apply` writes changes to GitHub (pro plan, requires GitHub token)
+
+Sessions are immutable after creation. The apply endpoint is idempotent - if already applied, it returns existing commit SHAs.

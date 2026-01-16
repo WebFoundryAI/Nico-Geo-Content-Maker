@@ -65,6 +65,17 @@ import type {
   ApiErrorCode,
   UsageInfo,
   RunResponseWithUsage,
+  ReviewSession,
+  ReviewCreateRequest,
+  ReviewCreateResponse,
+  ReviewGetResponse,
+  ReviewApproveResponse,
+  ReviewApplyResponse,
+  ReviewErrorResponse,
+  ReviewApiErrorCode,
+  ReviewPlannedFile,
+  ReviewDiffPreview,
+  ReviewPatch,
 } from './types';
 import { isValidMode, isValidConstraints, isValidTargetRepo } from './types';
 import { authenticateRequest, type KVNamespace, type ApiKeyRecord } from './auth';
@@ -74,6 +85,15 @@ import { matchGscToPages, normalizePath } from '../core/intelligence/gscSnapshot
 import { scorePages, type PageScoringInput } from '../core/intelligence/opportunityScorer';
 import { generateActionQueue, selectTopTargets } from '../core/intelligence/actionQueue';
 import type { ActionQueueItem } from './types';
+import {
+  createReviewSession,
+  storeSession,
+  getSessionWithExpirationCheck,
+  updateSessionStatus,
+  canApproveSession,
+  canApplySession,
+  isValidSessionId,
+} from './reviewSessions';
 
 /**
  * Environment bindings for the Worker.
@@ -81,6 +101,8 @@ import type { ActionQueueItem } from './types';
 export interface Env {
   /** KV namespace for API keys */
   NICO_GEO_KEYS: KVNamespace;
+  /** KV namespace for review sessions */
+  NICO_GEO_SESSIONS: KVNamespace;
   /** Durable Object namespace for rate limiting */
   RATE_LIMITER: DurableObjectNamespace;
 }
@@ -100,7 +122,7 @@ const AUTH_HEADER = 'Authorization';
  */
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
   'Access-Control-Allow-Headers': `Content-Type, ${AUTH_HEADER}, ${GITHUB_TOKEN_HEADER}`,
 };
 
@@ -783,6 +805,624 @@ async function handleAuditMode(request: RunRequest): Promise<RunResponse> {
   };
 }
 
+// ============================================
+// REVIEW SESSION ENDPOINTS (Baby Step 8D)
+// ============================================
+
+/**
+ * Creates a review error response.
+ */
+function reviewErrorResponse(
+  errorCode: ReviewApiErrorCode,
+  message: string,
+  status: number,
+  details?: Record<string, unknown>
+): Response {
+  const body: ReviewErrorResponse = {
+    status: 'error',
+    errorCode,
+    message,
+    ...(details && { details }),
+  };
+  return jsonResponse(body as unknown as ApiErrorResponse, status);
+}
+
+/**
+ * Validates the review create request body.
+ */
+function validateReviewCreateRequest(
+  body: unknown
+): { valid: true; request: ReviewCreateRequest } | { valid: false; error: string } {
+  if (!body || typeof body !== 'object') {
+    return { valid: false, error: 'Request body must be a JSON object' };
+  }
+
+  const obj = body as Record<string, unknown>;
+
+  // Mode must be 'improve'
+  if (obj.mode !== 'improve') {
+    return { valid: false, error: 'mode must be "improve" for review sessions' };
+  }
+
+  // siteUrl required
+  if (!obj.siteUrl || typeof obj.siteUrl !== 'string') {
+    return { valid: false, error: 'siteUrl is required' };
+  }
+  try {
+    new URL(obj.siteUrl);
+  } catch {
+    return { valid: false, error: 'siteUrl must be a valid URL' };
+  }
+
+  // constraints required with noHallucinations
+  if (!isValidConstraints(obj.constraints)) {
+    return { valid: false, error: 'constraints.noHallucinations must be true' };
+  }
+
+  // targetRepo required
+  if (!isValidTargetRepo(obj.targetRepo)) {
+    return {
+      valid: false,
+      error: 'targetRepo must include owner, repo, branch, projectType (astro-pages|static-html), and routeStrategy (path-index|flat-html)',
+    };
+  }
+
+  // Validate gscSnapshot if provided
+  let validatedGscRows: GscSnapshotRow[] | undefined;
+  if (obj.gscSnapshot !== undefined) {
+    const gscValidation = validateGscSnapshot(obj.gscSnapshot);
+    if (!gscValidation.valid && gscValidation.errors.length > 0) {
+      const errorSummary = gscValidation.errors
+        .slice(0, 3)
+        .map(e => `row ${e.rowIndex}: ${e.message}`)
+        .join('; ');
+      return { valid: false, error: `Invalid gscSnapshot: ${errorSummary}` };
+    }
+    validatedGscRows = gscValidation.validRows;
+  }
+
+  // Validate targetPaths if provided
+  if (obj.targetPaths !== undefined) {
+    if (!Array.isArray(obj.targetPaths)) {
+      return { valid: false, error: 'targetPaths must be an array of path strings' };
+    }
+    for (const p of obj.targetPaths) {
+      if (typeof p !== 'string' || p.length === 0) {
+        return { valid: false, error: 'targetPaths must contain non-empty strings' };
+      }
+    }
+  }
+
+  return {
+    valid: true,
+    request: {
+      mode: 'improve',
+      siteUrl: obj.siteUrl as string,
+      constraints: obj.constraints as ReviewCreateRequest['constraints'],
+      targetRepo: obj.targetRepo as TargetRepoConfig,
+      writeBackConfig: obj.writeBackConfig as WriteBackConfig | undefined,
+      gscSnapshot: validatedGscRows,
+      targetPaths: obj.targetPaths as string[] | undefined,
+    },
+  };
+}
+
+/**
+ * Handles POST /review/create
+ * Creates a review session for improve mode planning.
+ */
+async function handleReviewCreate(
+  request: Request,
+  env: Env,
+  keyRecord: ApiKeyRecord
+): Promise<Response> {
+  // Parse JSON body
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid JSON in request body', 400);
+  }
+
+  // Validate request
+  const validation = validateReviewCreateRequest(body);
+  if (!validation.valid) {
+    return reviewErrorResponse('VALIDATION_ERROR', validation.error, 400);
+  }
+
+  const reviewRequest = validation.request;
+
+  // Run improve mode planning (similar to handleImproveMode but without write-back)
+  // Crawl the site
+  const maxPages = reviewRequest.constraints.maxPages ?? DEFAULT_CRAWLER_CONFIG.maxPages;
+  let crawlResult;
+  try {
+    crawlResult = await crawlSite(reviewRequest.siteUrl, { maxPages });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Crawl failed';
+    return reviewErrorResponse('INTERNAL_ERROR', `Failed to crawl site: ${message}`, 500);
+  }
+
+  // Run gap analysis
+  const gapAnalysis = analyzeGeoGaps(crawlResult);
+
+  // Build action queue
+  const actionQueueData = buildActionQueue(gapAnalysis.pages, reviewRequest.gscSnapshot);
+
+  // Determine which pages to target
+  let selectedTargets: string[] = [];
+  let pagesToImprove = crawlResult.pages;
+
+  if (reviewRequest.targetPaths && reviewRequest.targetPaths.length > 0) {
+    const normalizedTargets = new Set(reviewRequest.targetPaths.map(p => normalizePath(p)));
+    pagesToImprove = crawlResult.pages.filter(page => {
+      const normalizedPath = normalizePath(page.url);
+      return normalizedTargets.has(normalizedPath);
+    });
+    selectedTargets = reviewRequest.targetPaths;
+  } else if (reviewRequest.gscSnapshot && reviewRequest.gscSnapshot.length > 0) {
+    const autoSelectCount = Math.min(DEFAULT_AUTO_SELECT_TARGETS, maxPages);
+    selectedTargets = selectTopTargets(
+      {
+        items: actionQueueData.items,
+        totalPagesAnalyzed: actionQueueData.summary.totalPagesAnalyzed,
+        pagesWithGscData: actionQueueData.summary.pagesWithGscData,
+        averageScore: actionQueueData.summary.averageScore,
+      },
+      autoSelectCount
+    );
+    const selectedPathSet = new Set(selectedTargets);
+    pagesToImprove = crawlResult.pages.filter(page => {
+      const normalizedPath = normalizePath(page.url);
+      return selectedPathSet.has(normalizedPath);
+    });
+  } else {
+    // No targeting - use all crawled pages
+    selectedTargets = crawlResult.pages.map(p => normalizePath(p.url));
+  }
+
+  // Generate improvement plan
+  const filteredCrawlResult = {
+    ...crawlResult,
+    pages: pagesToImprove,
+    pagesAnalyzed: pagesToImprove.length,
+  };
+  const improvementPlan = planSiteImprovements(filteredCrawlResult);
+
+  // Build path contract config
+  const pathContract: PathContractConfig = {
+    projectType: reviewRequest.targetRepo.projectType,
+    routeStrategy: reviewRequest.targetRepo.routeStrategy,
+  };
+
+  // Map URLs to file paths and fetch existing contents
+  const filePaths: string[] = [];
+  for (const page of improvementPlan.pages) {
+    try {
+      const mapping = mapUrlToFilePath(page.url, pathContract);
+      filePaths.push(mapping.filePath);
+    } catch {
+      // Mapping errors will be captured during planning
+    }
+  }
+
+  // Plan patches (without GitHub access - we can't fetch existing content)
+  // For review sessions, we plan with empty existing contents
+  const patchPlanConfig: PatchPlanConfig = {
+    pathContract,
+    patchOutputDir: reviewRequest.writeBackConfig?.patchOutputDir ?? 'geo-patches',
+  };
+
+  const existingContents = new Map<string, string | null>();
+  for (const path of filePaths) {
+    existingContents.set(path, null); // Assume all files are new for planning
+  }
+
+  const patchPlan = planPatches(improvementPlan.pages, existingContents, patchPlanConfig);
+
+  // Build review session data
+  const plannedFiles: ReviewPlannedFile[] = patchPlan.plannedChanges.map(c => ({
+    url: c.url,
+    filePath: c.filePath,
+    action: c.action,
+    humanReviewRequired: c.humanReviewRequired,
+    reviewNotes: c.reviewNotes,
+  }));
+
+  const diffPreviews: ReviewDiffPreview[] = patchPlan.diffPreviews;
+
+  const patches: ReviewPatch[] = patchPlan.plannedChanges.map(c => ({
+    url: c.url,
+    filePath: c.filePath,
+    newContent: c.newContent,
+    originalContent: c.originalContent,
+  }));
+
+  // Create and store the session
+  const session = createReviewSession({
+    siteUrl: reviewRequest.siteUrl,
+    selectedTargets,
+    plannedFiles,
+    diffPreviews,
+    patches,
+    targetRepo: reviewRequest.targetRepo,
+  });
+
+  await storeSession(env.NICO_GEO_SESSIONS, session);
+
+  // Build response
+  const filesRequiringReview = plannedFiles.filter(f => f.humanReviewRequired).length;
+  const response: ReviewCreateResponse = {
+    status: 'success',
+    sessionId: session.sessionId,
+    expiresAt: session.expiresAt,
+    summary: {
+      siteUrl: session.siteUrl,
+      selectedTargets: session.selectedTargets,
+      plannedFilesCount: plannedFiles.length,
+      filesRequiringReview,
+    },
+  };
+
+  return jsonResponse(response as unknown as RunResponse, 201);
+}
+
+/**
+ * Handles GET /review/{sessionId}
+ * Returns session details for review.
+ */
+async function handleReviewGet(
+  sessionId: string,
+  env: Env
+): Promise<Response> {
+  // Validate session ID format
+  if (!isValidSessionId(sessionId)) {
+    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid session ID format', 400);
+  }
+
+  // Get session
+  const result = await getSessionWithExpirationCheck(env.NICO_GEO_SESSIONS, sessionId);
+
+  if (!result.found) {
+    return reviewErrorResponse('SESSION_NOT_FOUND', 'Review session not found', 404);
+  }
+
+  const session = result.session;
+
+  // Build response (exclude sensitive data like full patch content)
+  const response: ReviewGetResponse = {
+    status: 'success',
+    session: {
+      sessionId: session.sessionId,
+      createdAt: session.createdAt,
+      expiresAt: session.expiresAt,
+      status: session.status,
+      siteUrl: session.siteUrl,
+      selectedTargets: session.selectedTargets,
+      plannedFiles: session.plannedFiles,
+      diffPreviews: session.diffPreviews,
+      patchCount: session.patches.length,
+      targetRepo: {
+        owner: session.targetRepo.owner,
+        repo: session.targetRepo.repo,
+        branch: session.targetRepo.branch,
+      },
+      commitShas: session.commitShas,
+    },
+  };
+
+  return jsonResponse(response as unknown as RunResponse, 200);
+}
+
+/**
+ * Handles POST /review/{sessionId}/approve
+ * Marks a session as approved.
+ */
+async function handleReviewApprove(
+  sessionId: string,
+  env: Env,
+  keyRecord: ApiKeyRecord
+): Promise<Response> {
+  // Validate session ID format
+  if (!isValidSessionId(sessionId)) {
+    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid session ID format', 400);
+  }
+
+  // Pro plan required for approval (same as write-back)
+  if (keyRecord.plan !== 'pro') {
+    return reviewErrorResponse(
+      'PLAN_REQUIRED',
+      'Review session approval requires a pro plan',
+      403,
+      { currentPlan: keyRecord.plan, requiredPlan: 'pro' }
+    );
+  }
+
+  // Get session
+  const result = await getSessionWithExpirationCheck(env.NICO_GEO_SESSIONS, sessionId);
+
+  if (!result.found) {
+    return reviewErrorResponse('SESSION_NOT_FOUND', 'Review session not found', 404);
+  }
+
+  const session = result.session;
+
+  // Check if can be approved
+  const canApprove = canApproveSession(session);
+  if (!canApprove.canApprove) {
+    if (session.status === 'expired' || result.expired) {
+      return reviewErrorResponse('SESSION_EXPIRED', canApprove.reason!, 410);
+    }
+    if (session.status === 'applied') {
+      return reviewErrorResponse('SESSION_ALREADY_APPLIED', canApprove.reason!, 409);
+    }
+    return reviewErrorResponse('VALIDATION_ERROR', canApprove.reason!, 400);
+  }
+
+  const previousStatus = session.status;
+
+  // Update status
+  await updateSessionStatus(env.NICO_GEO_SESSIONS, sessionId, 'approved');
+
+  const response: ReviewApproveResponse = {
+    status: 'success',
+    sessionId,
+    previousStatus,
+    newStatus: 'approved',
+  };
+
+  return jsonResponse(response as unknown as RunResponse, 200);
+}
+
+/**
+ * Handles POST /review/{sessionId}/apply
+ * Applies the approved session changes to GitHub.
+ */
+async function handleReviewApply(
+  sessionId: string,
+  request: Request,
+  env: Env,
+  keyRecord: ApiKeyRecord
+): Promise<Response> {
+  // Validate session ID format
+  if (!isValidSessionId(sessionId)) {
+    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid session ID format', 400);
+  }
+
+  // Pro plan required for apply
+  if (keyRecord.plan !== 'pro') {
+    return reviewErrorResponse(
+      'PLAN_REQUIRED',
+      'Review session apply requires a pro plan',
+      403,
+      { currentPlan: keyRecord.plan, requiredPlan: 'pro' }
+    );
+  }
+
+  // GitHub token required at apply time (never stored)
+  const githubToken = extractGitHubToken(request);
+  if (!githubToken) {
+    return reviewErrorResponse(
+      'VALIDATION_ERROR',
+      `GitHub token required in ${GITHUB_TOKEN_HEADER} header`,
+      400
+    );
+  }
+
+  // Get session
+  const result = await getSessionWithExpirationCheck(env.NICO_GEO_SESSIONS, sessionId);
+
+  if (!result.found) {
+    return reviewErrorResponse('SESSION_NOT_FOUND', 'Review session not found', 404);
+  }
+
+  const session = result.session;
+
+  // Check if can be applied
+  const canApply = canApplySession(session);
+  if (!canApply.canApply) {
+    // Handle idempotent case - already applied
+    if (canApply.isIdempotent && session.commitShas) {
+      const response: ReviewApplyResponse = {
+        status: 'success',
+        sessionId,
+        applied: false,
+        commitShas: session.commitShas,
+        message: 'Session was already applied. Returning existing commit SHAs.',
+      };
+      return jsonResponse(response as unknown as RunResponse, 200);
+    }
+
+    if (session.status === 'expired' || result.expired) {
+      return reviewErrorResponse('SESSION_EXPIRED', canApply.reason!, 410);
+    }
+    if (session.status !== 'approved') {
+      return reviewErrorResponse('SESSION_NOT_APPROVED', canApply.reason!, 400);
+    }
+    return reviewErrorResponse('VALIDATION_ERROR', canApply.reason!, 400);
+  }
+
+  // Build GitHub config
+  const githubConfig: GitHubClientConfig = {
+    token: githubToken,
+    target: {
+      owner: session.targetRepo.owner,
+      repo: session.targetRepo.repo,
+      branch: session.targetRepo.branch,
+    },
+  };
+
+  // Verify write access
+  try {
+    await verifyWriteAccess(githubConfig);
+  } catch (err) {
+    if (err instanceof GitHubAPIError) {
+      return reviewErrorResponse(
+        'VALIDATION_ERROR',
+        `GitHub access verification failed: ${err.message}`,
+        403
+      );
+    }
+    throw err;
+  }
+
+  // Convert session patches to planned changes for application
+  const plannedChanges = session.patches.map(p => ({
+    url: p.url,
+    filePath: p.filePath,
+    action: session.plannedFiles.find(f => f.filePath === p.filePath)?.action ?? 'create' as const,
+    originalContent: p.originalContent,
+    newContent: p.newContent,
+    humanReviewRequired: false,
+    reviewNotes: [],
+  }));
+
+  // Apply patches
+  const applyResult = await applyPlannedPatches(githubConfig, plannedChanges, false);
+
+  if (!applyResult.success) {
+    return reviewErrorResponse(
+      'INTERNAL_ERROR',
+      `Write-back failed: ${applyResult.errors.join(', ')}`,
+      500
+    );
+  }
+
+  // Extract commit SHAs
+  const commitShas = applyResult.commits.map(c => c.sha);
+
+  // Update session status to applied
+  await updateSessionStatus(env.NICO_GEO_SESSIONS, sessionId, 'applied', commitShas);
+
+  const response: ReviewApplyResponse = {
+    status: 'success',
+    sessionId,
+    applied: true,
+    commitShas,
+    message: `Successfully applied ${applyResult.patchesApplied} patches`,
+  };
+
+  return jsonResponse(response as unknown as RunResponse, 200);
+}
+
+/**
+ * Routes review-related requests to appropriate handlers.
+ * Endpoints:
+ *   POST /review/create - Create a new review session
+ *   GET /review/{sessionId} - Get session details
+ *   POST /review/{sessionId}/approve - Approve a session
+ *   POST /review/{sessionId}/apply - Apply approved session changes
+ */
+async function handleReviewRoutes(
+  request: Request,
+  url: URL,
+  env: Env
+): Promise<Response> {
+  const path = url.pathname;
+  const method = request.method;
+
+  // POST /review/create
+  if (path === '/review/create' && method === 'POST') {
+    // Authenticate
+    const authResult = await authenticateRequest(request, env.NICO_GEO_KEYS);
+    if (!authResult.valid) {
+      return reviewErrorResponse(authResult.errorCode, authResult.message, 401);
+    }
+
+    // Rate limit
+    const rateLimitResult = await checkRateLimit(
+      authResult.keyRecord.keyId,
+      authResult.keyRecord.plan,
+      env.RATE_LIMITER
+    );
+    if (!rateLimitResult.allowed) {
+      return reviewErrorResponse(
+        rateLimitResult.errorCode,
+        rateLimitResult.message,
+        429,
+        { retryAfterSeconds: rateLimitResult.retryAfterSeconds }
+      );
+    }
+
+    return handleReviewCreate(request, env, authResult.keyRecord);
+  }
+
+  // Match /review/{sessionId} patterns
+  const sessionMatch = path.match(/^\/review\/([a-f0-9-]+)(\/.*)?$/);
+  if (!sessionMatch) {
+    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid review endpoint', 404);
+  }
+
+  const sessionId = sessionMatch[1];
+  const subPath = sessionMatch[2] || '';
+
+  // GET /review/{sessionId}
+  if (subPath === '' && method === 'GET') {
+    // Authenticate (read access allowed for any valid key)
+    const authResult = await authenticateRequest(request, env.NICO_GEO_KEYS);
+    if (!authResult.valid) {
+      return reviewErrorResponse(authResult.errorCode, authResult.message, 401);
+    }
+
+    return handleReviewGet(sessionId, env);
+  }
+
+  // POST /review/{sessionId}/approve
+  if (subPath === '/approve' && method === 'POST') {
+    // Authenticate
+    const authResult = await authenticateRequest(request, env.NICO_GEO_KEYS);
+    if (!authResult.valid) {
+      return reviewErrorResponse(authResult.errorCode, authResult.message, 401);
+    }
+
+    // Rate limit
+    const rateLimitResult = await checkRateLimit(
+      authResult.keyRecord.keyId,
+      authResult.keyRecord.plan,
+      env.RATE_LIMITER
+    );
+    if (!rateLimitResult.allowed) {
+      return reviewErrorResponse(
+        rateLimitResult.errorCode,
+        rateLimitResult.message,
+        429,
+        { retryAfterSeconds: rateLimitResult.retryAfterSeconds }
+      );
+    }
+
+    return handleReviewApprove(sessionId, env, authResult.keyRecord);
+  }
+
+  // POST /review/{sessionId}/apply
+  if (subPath === '/apply' && method === 'POST') {
+    // Authenticate
+    const authResult = await authenticateRequest(request, env.NICO_GEO_KEYS);
+    if (!authResult.valid) {
+      return reviewErrorResponse(authResult.errorCode, authResult.message, 401);
+    }
+
+    // Rate limit
+    const rateLimitResult = await checkRateLimit(
+      authResult.keyRecord.keyId,
+      authResult.keyRecord.plan,
+      env.RATE_LIMITER
+    );
+    if (!rateLimitResult.allowed) {
+      return reviewErrorResponse(
+        rateLimitResult.errorCode,
+        rateLimitResult.message,
+        429,
+        { retryAfterSeconds: rateLimitResult.retryAfterSeconds }
+      );
+    }
+
+    return handleReviewApply(sessionId, request, env, authResult.keyRecord);
+  }
+
+  // Unknown review endpoint
+  return reviewErrorResponse('VALIDATION_ERROR', 'Invalid review endpoint or method', 404);
+}
+
 /**
  * Main request handler for the Worker.
  */
@@ -797,7 +1437,16 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     });
   }
 
-  // Only accept POST to /run
+  // ============================================
+  // ROUTE: /review/* (Review Session Endpoints)
+  // ============================================
+  if (url.pathname.startsWith('/review')) {
+    return handleReviewRoutes(request, url, env);
+  }
+
+  // ============================================
+  // ROUTE: POST /run (Main API Endpoint)
+  // ============================================
   if (request.method !== 'POST') {
     return apiErrorResponse('VALIDATION_ERROR', 'Method not allowed. Use POST.', 405);
   }

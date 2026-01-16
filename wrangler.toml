@@ -24,6 +24,22 @@ binding = "NICO_GEO_KEYS"
 id = "REPLACE_WITH_KV_NAMESPACE_ID"
 preview_id = "REPLACE_WITH_PREVIEW_KV_NAMESPACE_ID"
 
+# The NICO_GEO_SESSIONS namespace stores review sessions for the review workflow.
+# Sessions are automatically expired via KV TTL (default 24 hours).
+#
+# To create the KV namespace for production:
+#   wrangler kv:namespace create "NICO_GEO_SESSIONS"
+#
+# For local development (preview):
+#   wrangler kv:namespace create "NICO_GEO_SESSIONS" --preview
+#
+# After creation, replace the placeholder IDs below with the actual IDs.
+
+[[kv_namespaces]]
+binding = "NICO_GEO_SESSIONS"
+id = "REPLACE_WITH_SESSIONS_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_SESSIONS_PREVIEW_KV_NAMESPACE_ID"
+
 # ============================================
 # DURABLE OBJECT BINDINGS
 # ============================================
