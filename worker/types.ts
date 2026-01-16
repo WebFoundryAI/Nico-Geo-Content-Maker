@@ -8,6 +8,8 @@ import type { BusinessInput } from '../inputs/business.schema';
 import type { SiteGapAnalysis, GapFlag } from '../core/analyze/geoGapAnalyzer';
 import type { SiteImprovementPlan, PageImprovementPlan } from '../core/analyze/improvementPlanner';
 import type { CrawlResult } from '../core/ingest/siteCrawler';
+import type { CommitResult } from '../core/writeback/githubClient';
+import type { FilePatch } from '../core/writeback/patchApplier';
 
 /**
  * Supported execution modes for the GEO Worker.
@@ -25,18 +27,52 @@ export interface RunConstraints {
 }
 
 /**
+ * Target repository configuration for write-back.
+ */
+export interface TargetRepoConfig {
+  owner: string;
+  repo: string;
+  branch: string;
+}
+
+/**
+ * Path mapping for write-back operations.
+ */
+export interface WriteBackPathMapping {
+  urlPath: string;
+  filePath: string;
+  fileType: 'astro' | 'html' | 'markdown' | 'json';
+}
+
+/**
+ * Write-back configuration.
+ */
+export interface WriteBackConfig {
+  pathMappings?: WriteBackPathMapping[];
+  patchOutputDir?: string;
+}
+
+/**
  * Request body for the /run endpoint.
  *
  * Mode requirements:
  * - "improve": requires siteUrl
  * - "generate": requires businessInput
  * - "audit": requires siteUrl
+ *
+ * Write-back requirements (improve mode only):
+ * - writeBack: true to enable write-back
+ * - targetRepo: { owner, repo, branch } to specify destination
+ * - GitHub token in X-GitHub-Token header
  */
 export interface RunRequest {
   mode: RunMode;
   siteUrl?: string;
   businessInput?: BusinessInput;
   constraints: RunConstraints;
+  writeBack?: boolean;
+  targetRepo?: TargetRepoConfig;
+  writeBackConfig?: WriteBackConfig;
 }
 
 /**
@@ -49,6 +85,8 @@ export interface RunSummary {
   sectionsGenerated?: number;
   pagesAnalyzed?: number;
   sitemapFound?: boolean;
+  writeBackEnabled?: boolean;
+  writeBackDryRun?: boolean;
   warnings?: string[];
 }
 
@@ -76,6 +114,30 @@ export interface AuditResults {
 }
 
 /**
+ * Write-back result information.
+ */
+export interface WriteBackResult {
+  success: boolean;
+  dryRun: boolean;
+  patchesGenerated: number;
+  patchesApplied: number;
+  commits: Array<{
+    sha: string;
+    path: string;
+    message: string;
+    url: string;
+  }>;
+  patches: Array<{
+    path: string;
+    operation: 'create' | 'update' | 'append';
+    humanReviewRequired: boolean;
+    reviewNotes: string[];
+  }>;
+  errors: string[];
+  warnings: string[];
+}
+
+/**
  * Improve-specific results (patch-ready blocks).
  */
 export interface ImproveResults {
@@ -85,6 +147,7 @@ export interface ImproveResults {
   pages: PageImprovementPlan[];
   siteWideSuggestions: string[];
   crawlErrors: string[];
+  writeBack?: WriteBackResult;
 }
 
 /**
@@ -156,4 +219,23 @@ export function isValidConstraints(constraints: unknown): constraints is RunCons
 
   const c = constraints as Record<string, unknown>;
   return c.noHallucinations === true;
+}
+
+/**
+ * Type guard to check if targetRepo is valid.
+ */
+export function isValidTargetRepo(targetRepo: unknown): targetRepo is TargetRepoConfig {
+  if (!targetRepo || typeof targetRepo !== 'object') {
+    return false;
+  }
+
+  const t = targetRepo as Record<string, unknown>;
+  return (
+    typeof t.owner === 'string' &&
+    t.owner.length > 0 &&
+    typeof t.repo === 'string' &&
+    t.repo.length > 0 &&
+    typeof t.branch === 'string' &&
+    t.branch.length > 0
+  );
 }
