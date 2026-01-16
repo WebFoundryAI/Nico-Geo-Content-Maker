@@ -8,7 +8,6 @@
 // ============================================================
 
 interface Issue {
-  id: string;
   title: string;
   priority: 'critical' | 'high' | 'medium' | 'low';
   evidence: string;
@@ -392,7 +391,6 @@ function runChecks(signals: Signals): Issue[] {
   // CRITICAL: Indexability blocked
   if (signals.robotsNoindex) {
     issues.push({
-      id: 'noindex-blocked',
       title: 'Page Blocked from Indexing',
       priority: 'critical',
       evidence: 'Found <meta name="robots" content="noindex"> - search engines and AI will NOT index this page',
@@ -404,7 +402,6 @@ function runChecks(signals: Signals): Issue[] {
   // CRITICAL: Missing title
   if (!signals.title || signals.title.length < 10) {
     issues.push({
-      id: 'missing-title',
       title: 'Missing or Invalid Page Title',
       priority: 'critical',
       evidence: signals.title
@@ -418,7 +415,6 @@ function runChecks(signals: Signals): Issue[] {
   // CRITICAL: Missing H1
   if (signals.h1Count === 0) {
     issues.push({
-      id: 'missing-h1',
       title: 'Missing H1 Heading',
       priority: 'critical',
       evidence: 'No <h1> tag found on the page',
@@ -430,7 +426,6 @@ function runChecks(signals: Signals): Issue[] {
   // CRITICAL: No schema markup
   if (!signals.hasLocalBusinessSchema && !signals.hasOrganizationSchema) {
     issues.push({
-      id: 'no-schema',
       title: 'Missing Business Schema Markup',
       priority: 'critical',
       evidence: signals.jsonLdTypes.length > 0
@@ -444,7 +439,6 @@ function runChecks(signals: Signals): Issue[] {
   // HIGH: Thin content
   if (signals.wordCount < 300) {
     issues.push({
-      id: 'thin-content',
       title: 'Critically Thin Content',
       priority: 'critical',
       evidence: `Page has only ${signals.wordCount} words (minimum recommended: 500 words)`,
@@ -453,7 +447,6 @@ function runChecks(signals: Signals): Issue[] {
     });
   } else if (signals.wordCount < 500) {
     issues.push({
-      id: 'low-content',
       title: 'Limited Content Depth',
       priority: 'high',
       evidence: `Page has ${signals.wordCount} words (recommended: 800+ words)`,
@@ -465,7 +458,6 @@ function runChecks(signals: Signals): Issue[] {
   // HIGH: Missing meta description
   if (!signals.metaDescription || signals.metaDescription.length < 50) {
     issues.push({
-      id: 'missing-meta-description',
       title: 'Missing or Weak Meta Description',
       priority: 'high',
       evidence: signals.metaDescription
@@ -479,7 +471,6 @@ function runChecks(signals: Signals): Issue[] {
   // HIGH: No geo targeting
   if (!signals.hasGeoKeywords) {
     issues.push({
-      id: 'no-geo-targeting',
       title: 'No Geographic Targeting',
       priority: 'high',
       evidence: 'No location keywords found in title, H1, H2s, or meta description',
@@ -491,7 +482,6 @@ function runChecks(signals: Signals): Issue[] {
   // HIGH: Multiple or missing H1s
   if (signals.h1Count > 1) {
     issues.push({
-      id: 'multiple-h1s',
       title: 'Multiple H1 Headings',
       priority: 'high',
       evidence: `Found ${signals.h1Count} H1 tags on the page - should only have one`,
@@ -503,7 +493,6 @@ function runChecks(signals: Signals): Issue[] {
   // HIGH: Missing NAP (for local businesses)
   if (!signals.hasPhone && !signals.hasEmail) {
     issues.push({
-      id: 'missing-contact',
       title: 'No Contact Information Visible',
       priority: 'high',
       evidence: 'No phone number or email address detected on the page',
@@ -515,7 +504,6 @@ function runChecks(signals: Signals): Issue[] {
   // MEDIUM: Weak internal linking
   if (signals.internalLinkCount < 5) {
     issues.push({
-      id: 'weak-internal-links',
       title: 'Insufficient Internal Linking',
       priority: 'medium',
       evidence: `Only ${signals.internalLinkCount} internal links found (recommended: 10+)`,
@@ -527,7 +515,6 @@ function runChecks(signals: Signals): Issue[] {
   // MEDIUM: No service keywords
   if (!signals.hasServiceKeywords) {
     issues.push({
-      id: 'no-service-keywords',
       title: 'Weak Service Keyword Usage',
       priority: 'medium',
       evidence: 'No clear service keywords found in key page elements (title, H1, H2s, meta)',
@@ -539,7 +526,6 @@ function runChecks(signals: Signals): Issue[] {
   // MEDIUM: Flat heading structure
   if (signals.h1Count > 0 && signals.h2s.length === 0) {
     issues.push({
-      id: 'flat-headings',
       title: 'Flat Heading Structure',
       priority: 'medium',
       evidence: `Found H1 but no H2 subheadings (${signals.h3s.length} H3s found)`,
@@ -557,7 +543,6 @@ function runChecks(signals: Signals): Issue[] {
   const duplicateAnchors = [...anchorCounts.entries()].filter(([_, count]) => count > 3);
   if (duplicateAnchors.length > 0) {
     issues.push({
-      id: 'duplicate-anchors',
       title: 'Repetitive Anchor Text',
       priority: 'medium',
       evidence: `Overused anchors: ${duplicateAnchors.slice(0, 3).map(([text, count]) => `"${text}" (${count}x)`).join(', ')}`,
@@ -569,7 +554,6 @@ function runChecks(signals: Signals): Issue[] {
   // MEDIUM: Missing address for local business
   if (signals.hasLocalBusinessSchema && !signals.hasAddress) {
     issues.push({
-      id: 'missing-address',
       title: 'No Physical Address Displayed',
       priority: 'medium',
       evidence: 'LocalBusiness schema detected but no street address found on page',
@@ -581,7 +565,6 @@ function runChecks(signals: Signals): Issue[] {
   // LOW: Title length optimization
   if (signals.title && (signals.title.length < 30 || signals.title.length > 65)) {
     issues.push({
-      id: 'title-length',
       title: 'Suboptimal Title Length',
       priority: 'low',
       evidence: `Title is ${signals.title.length} characters (optimal: 50-60)`,
@@ -593,7 +576,6 @@ function runChecks(signals: Signals): Issue[] {
   // LOW: Meta description length optimization
   if (signals.metaDescription && (signals.metaDescription.length < 120 || signals.metaDescription.length > 165)) {
     issues.push({
-      id: 'meta-length',
       title: 'Suboptimal Meta Description Length',
       priority: 'low',
       evidence: `Meta description is ${signals.metaDescription.length} characters (optimal: 150-160)`,
@@ -605,7 +587,6 @@ function runChecks(signals: Signals): Issue[] {
   // LOW: Missing canonical
   if (!signals.canonicalUrl) {
     issues.push({
-      id: 'missing-canonical',
       title: 'Missing Canonical Tag',
       priority: 'low',
       evidence: 'No <link rel="canonical"> found',
@@ -617,7 +598,6 @@ function runChecks(signals: Signals): Issue[] {
   // LOW: Few H2s
   if (signals.h2s.length > 0 && signals.h2s.length < 3 && signals.wordCount > 500) {
     issues.push({
-      id: 'few-subheadings',
       title: 'Limited Subheadings',
       priority: 'low',
       evidence: `Only ${signals.h2s.length} H2 subheadings for ${signals.wordCount} words`,
