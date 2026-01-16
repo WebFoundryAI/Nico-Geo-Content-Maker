@@ -6,7 +6,10 @@
  * ingestion, and invokes the existing GEO engine.
  *
  * Endpoint: POST /run
- * Modes: "improve", "generate", "audit"
+ * Modes:
+ *   - "generate": Create GEO content from BusinessInput
+ *   - "audit": Analyze existing site for GEO gaps
+ *   - "improve": Generate patch-ready improvement blocks
  *
  * CONSTRAINTS:
  * - Never writes files
@@ -19,6 +22,9 @@ import type { BusinessInput } from '../inputs/business.schema';
 import { validateBusinessInput } from '../core/rules/businessInput.validator';
 import { runGEOPipeline } from '../core/pipeline/geoPipeline';
 import { validateGEOOutput } from '../contracts/output.contract';
+import { crawlSite, DEFAULT_CRAWLER_CONFIG } from '../core/ingest/siteCrawler';
+import { analyzeGeoGaps } from '../core/analyze/geoGapAnalyzer';
+import { planSiteImprovements } from '../core/analyze/improvementPlanner';
 import type {
   RunRequest,
   RunResponse,
@@ -26,6 +32,8 @@ import type {
   RunMode,
   RunSummary,
   RunResults,
+  AuditResults,
+  ImproveResults,
 } from './types';
 import { isValidMode, isValidConstraints } from './types';
 
@@ -126,27 +134,38 @@ function validateRequest(body: unknown): { valid: true; request: RunRequest } | 
 
 /**
  * Handles "improve" mode execution.
- * TODO: Implement site crawling and ingestion
+ * Crawls site and generates patch-ready improvement blocks.
  */
 async function handleImproveMode(request: RunRequest): Promise<RunResponse> {
-  // TODO: Implement site ingestion
-  // 1. Fetch and parse the siteUrl
-  // 2. Extract existing content structure
-  // 3. Identify missing GEO elements
-  // 4. Generate improvement suggestions based on BusinessInput schema
+  if (!request.siteUrl) {
+    throw new Error('siteUrl is required for improve mode');
+  }
+
+  // Crawl the site
+  const maxPages = request.constraints.maxPages ?? DEFAULT_CRAWLER_CONFIG.maxPages;
+  const crawlResult = await crawlSite(request.siteUrl, { maxPages });
+
+  // Generate improvement plan
+  const improvementPlan = planSiteImprovements(crawlResult);
 
   const summary: RunSummary = {
     mode: 'improve',
     processedAt: new Date().toISOString(),
     inputSource: 'siteUrl',
-    warnings: ['Site ingestion not yet implemented'],
+    pagesAnalyzed: crawlResult.pagesAnalyzed,
+    sitemapFound: crawlResult.sitemapFound,
+    warnings: crawlResult.errors.length > 0 ? crawlResult.errors : undefined,
   };
 
   const results: RunResults = {
-    improvementSuggestions: [
-      // TODO: Populate with actual suggestions after site analysis
-      'Site ingestion pending implementation',
-    ],
+    improvements: {
+      siteUrl: improvementPlan.siteUrl,
+      totalPages: improvementPlan.totalPages,
+      pagesWithImprovements: improvementPlan.pagesWithImprovements,
+      pages: improvementPlan.pages,
+      siteWideSuggestions: improvementPlan.siteWideSuggestions,
+      crawlErrors: crawlResult.errors,
+    },
   };
 
   return {
@@ -200,29 +219,44 @@ async function handleGenerateMode(request: RunRequest): Promise<RunResponse> {
 
 /**
  * Handles "audit" mode execution.
- * TODO: Implement site crawling and GEO audit
+ * Crawls site and performs GEO gap analysis.
  */
 async function handleAuditMode(request: RunRequest): Promise<RunResponse> {
-  // TODO: Implement site audit
-  // 1. Fetch and parse the siteUrl
-  // 2. Analyze existing GEO content
-  // 3. Check for schema.org markup
-  // 4. Evaluate answer capsule readiness
-  // 5. Assess FAQ structure
-  // 6. Return detailed audit findings
+  if (!request.siteUrl) {
+    throw new Error('siteUrl is required for audit mode');
+  }
+
+  // Crawl the site
+  const maxPages = request.constraints.maxPages ?? DEFAULT_CRAWLER_CONFIG.maxPages;
+  const crawlResult = await crawlSite(request.siteUrl, { maxPages });
+
+  // Run gap analysis
+  const gapAnalysis = analyzeGeoGaps(crawlResult);
 
   const summary: RunSummary = {
     mode: 'audit',
     processedAt: new Date().toISOString(),
     inputSource: 'siteUrl',
-    warnings: ['Site audit not yet implemented'],
+    pagesAnalyzed: crawlResult.pagesAnalyzed,
+    sitemapFound: crawlResult.sitemapFound,
+    warnings: crawlResult.errors.length > 0 ? crawlResult.errors : undefined,
+  };
+
+  const auditResults: AuditResults = {
+    siteUrl: gapAnalysis.siteUrl,
+    totalPages: gapAnalysis.totalPages,
+    pagesWithGaps: gapAnalysis.pagesWithGaps,
+    averageGeoScore: gapAnalysis.averageGeoScore,
+    criticalIssues: gapAnalysis.criticalIssues,
+    warnings: gapAnalysis.warnings,
+    suggestions: gapAnalysis.suggestions,
+    siteWideIssues: gapAnalysis.siteWideIssues,
+    pages: gapAnalysis.pages,
+    crawlErrors: crawlResult.errors,
   };
 
   const results: RunResults = {
-    auditFindings: [
-      // TODO: Populate with actual findings after site analysis
-      'Site audit pending implementation',
-    ],
+    audit: auditResults,
   };
 
   return {
