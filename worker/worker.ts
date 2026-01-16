@@ -94,6 +94,20 @@ import {
   canApplySession,
   isValidSessionId,
 } from './reviewSessions';
+import {
+  getOrCreateRequestId,
+  createLogger,
+  addRequestIdHeader,
+  REQUEST_ID_HEADER,
+  Logger,
+} from './observability';
+import {
+  createErrorResponse,
+  isPayloadTooLarge,
+  MAX_PAYLOAD_SIZE_BYTES,
+  VERSION_INFO,
+  type ApiErrorCode as CentralApiErrorCode,
+} from './errors';
 
 /**
  * Environment bindings for the Worker.
@@ -120,10 +134,11 @@ const AUTH_HEADER = 'Authorization';
 /**
  * CORS headers for all responses.
  */
-const CORS_HEADERS = {
+const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-  'Access-Control-Allow-Headers': `Content-Type, ${AUTH_HEADER}, ${GITHUB_TOKEN_HEADER}`,
+  'Access-Control-Allow-Headers': `Content-Type, ${AUTH_HEADER}, ${GITHUB_TOKEN_HEADER}, ${REQUEST_ID_HEADER}`,
+  'Access-Control-Expose-Headers': REQUEST_ID_HEADER,
 };
 
 /**
@@ -132,18 +147,23 @@ const CORS_HEADERS = {
 const DEFAULT_AUTO_SELECT_TARGETS = 5;
 
 /**
- * Creates a JSON response with proper headers.
+ * Creates a JSON response with proper headers and request ID.
  */
 function jsonResponse(
   data: RunResponse | RunResponseWithUsage | ErrorResponse | ApiErrorResponse,
-  status: number = 200
+  status: number = 200,
+  requestId?: string
 ): Response {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...CORS_HEADERS,
+  };
+  if (requestId) {
+    headers[REQUEST_ID_HEADER] = requestId;
+  }
   return new Response(JSON.stringify(data, null, 2), {
     status,
-    headers: {
-      'Content-Type': 'application/json',
-      ...CORS_HEADERS,
-    },
+    headers,
   });
 }
 
@@ -162,21 +182,23 @@ function errorResponse(message: string, mode: RunMode | null = null, status: num
 }
 
 /**
- * Creates a structured API error response.
+ * Creates a structured API error response with requestId.
  */
 function apiErrorResponse(
   errorCode: ApiErrorCode,
   message: string,
   status: number,
+  requestId: string,
   details?: Record<string, unknown>
 ): Response {
-  const body: ApiErrorResponse = {
+  const body: ApiErrorResponse & { requestId: string } = {
     status: 'error',
+    requestId,
     errorCode,
     message,
     ...(details && { details }),
   };
-  return jsonResponse(body, status);
+  return jsonResponse(body, status, requestId);
 }
 
 /**
@@ -810,21 +832,23 @@ async function handleAuditMode(request: RunRequest): Promise<RunResponse> {
 // ============================================
 
 /**
- * Creates a review error response.
+ * Creates a review error response with requestId.
  */
 function reviewErrorResponse(
   errorCode: ReviewApiErrorCode,
   message: string,
   status: number,
+  requestId: string,
   details?: Record<string, unknown>
 ): Response {
-  const body: ReviewErrorResponse = {
+  const body: ReviewErrorResponse & { requestId: string } = {
     status: 'error',
+    requestId,
     errorCode,
     message,
     ...(details && { details }),
   };
-  return jsonResponse(body as unknown as ApiErrorResponse, status);
+  return jsonResponse(body as unknown as ApiErrorResponse, status, requestId);
 }
 
 /**
@@ -914,20 +938,26 @@ function validateReviewCreateRequest(
 async function handleReviewCreate(
   request: Request,
   env: Env,
-  keyRecord: ApiKeyRecord
+  keyRecord: ApiKeyRecord,
+  requestId: string,
+  logger: Logger
 ): Promise<Response> {
   // Parse JSON body
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid JSON in request body', 400);
+    logger.error('Invalid JSON body', 'VALIDATION_ERROR');
+    logger.complete(400, 'VALIDATION_ERROR');
+    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid JSON in request body', 400, requestId);
   }
 
   // Validate request
   const validation = validateReviewCreateRequest(body);
   if (!validation.valid) {
-    return reviewErrorResponse('VALIDATION_ERROR', validation.error, 400);
+    logger.error(validation.error, 'VALIDATION_ERROR');
+    logger.complete(400, 'VALIDATION_ERROR');
+    return reviewErrorResponse('VALIDATION_ERROR', validation.error, 400, requestId);
   }
 
   const reviewRequest = validation.request;
@@ -940,7 +970,9 @@ async function handleReviewCreate(
     crawlResult = await crawlSite(reviewRequest.siteUrl, { maxPages });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Crawl failed';
-    return reviewErrorResponse('INTERNAL_ERROR', `Failed to crawl site: ${message}`, 500);
+    logger.error(`Failed to crawl site: ${message}`, 'INTERNAL_ERROR');
+    logger.complete(500, 'INTERNAL_ERROR');
+    return reviewErrorResponse('INTERNAL_ERROR', `Failed to crawl site: ${message}`, 500, requestId);
   }
 
   // Run gap analysis
@@ -1052,8 +1084,9 @@ async function handleReviewCreate(
 
   // Build response
   const filesRequiringReview = plannedFiles.filter(f => f.humanReviewRequired).length;
-  const response: ReviewCreateResponse = {
+  const response: ReviewCreateResponse & { requestId: string } = {
     status: 'success',
+    requestId,
     sessionId: session.sessionId,
     expiresAt: session.expiresAt,
     summary: {
@@ -1064,7 +1097,8 @@ async function handleReviewCreate(
     },
   };
 
-  return jsonResponse(response as unknown as RunResponse, 201);
+  logger.complete(201);
+  return jsonResponse(response as unknown as RunResponse, 201, requestId);
 }
 
 /**
@@ -1073,25 +1107,32 @@ async function handleReviewCreate(
  */
 async function handleReviewGet(
   sessionId: string,
-  env: Env
+  env: Env,
+  requestId: string,
+  logger: Logger
 ): Promise<Response> {
   // Validate session ID format
   if (!isValidSessionId(sessionId)) {
-    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid session ID format', 400);
+    logger.error('Invalid session ID format', 'VALIDATION_ERROR');
+    logger.complete(400, 'VALIDATION_ERROR');
+    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid session ID format', 400, requestId);
   }
 
   // Get session
   const result = await getSessionWithExpirationCheck(env.NICO_GEO_SESSIONS, sessionId);
 
   if (!result.found) {
-    return reviewErrorResponse('SESSION_NOT_FOUND', 'Review session not found', 404);
+    logger.error('Review session not found', 'SESSION_NOT_FOUND');
+    logger.complete(404, 'SESSION_NOT_FOUND');
+    return reviewErrorResponse('SESSION_NOT_FOUND', 'Review session not found', 404, requestId);
   }
 
   const session = result.session;
 
   // Build response (exclude sensitive data like full patch content)
-  const response: ReviewGetResponse = {
+  const response: ReviewGetResponse & { requestId: string } = {
     status: 'success',
+    requestId,
     session: {
       sessionId: session.sessionId,
       createdAt: session.createdAt,
@@ -1111,7 +1152,8 @@ async function handleReviewGet(
     },
   };
 
-  return jsonResponse(response as unknown as RunResponse, 200);
+  logger.complete(200);
+  return jsonResponse(response as unknown as RunResponse, 200, requestId);
 }
 
 /**
@@ -1121,19 +1163,26 @@ async function handleReviewGet(
 async function handleReviewApprove(
   sessionId: string,
   env: Env,
-  keyRecord: ApiKeyRecord
+  keyRecord: ApiKeyRecord,
+  requestId: string,
+  logger: Logger
 ): Promise<Response> {
   // Validate session ID format
   if (!isValidSessionId(sessionId)) {
-    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid session ID format', 400);
+    logger.error('Invalid session ID format', 'VALIDATION_ERROR');
+    logger.complete(400, 'VALIDATION_ERROR');
+    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid session ID format', 400, requestId);
   }
 
   // Pro plan required for approval (same as write-back)
   if (keyRecord.plan !== 'pro') {
+    logger.error('Pro plan required', 'PLAN_REQUIRED');
+    logger.complete(403, 'PLAN_REQUIRED');
     return reviewErrorResponse(
       'PLAN_REQUIRED',
       'Review session approval requires a pro plan',
       403,
+      requestId,
       { currentPlan: keyRecord.plan, requiredPlan: 'pro' }
     );
   }
@@ -1142,7 +1191,9 @@ async function handleReviewApprove(
   const result = await getSessionWithExpirationCheck(env.NICO_GEO_SESSIONS, sessionId);
 
   if (!result.found) {
-    return reviewErrorResponse('SESSION_NOT_FOUND', 'Review session not found', 404);
+    logger.error('Session not found', 'SESSION_NOT_FOUND');
+    logger.complete(404, 'SESSION_NOT_FOUND');
+    return reviewErrorResponse('SESSION_NOT_FOUND', 'Review session not found', 404, requestId);
   }
 
   const session = result.session;
@@ -1151,12 +1202,18 @@ async function handleReviewApprove(
   const canApprove = canApproveSession(session);
   if (!canApprove.canApprove) {
     if (session.status === 'expired' || result.expired) {
-      return reviewErrorResponse('SESSION_EXPIRED', canApprove.reason!, 410);
+      logger.error('Session expired', 'SESSION_EXPIRED');
+      logger.complete(410, 'SESSION_EXPIRED');
+      return reviewErrorResponse('SESSION_EXPIRED', canApprove.reason!, 410, requestId);
     }
     if (session.status === 'applied') {
-      return reviewErrorResponse('SESSION_ALREADY_APPLIED', canApprove.reason!, 409);
+      logger.error('Session already applied', 'SESSION_ALREADY_APPLIED');
+      logger.complete(409, 'SESSION_ALREADY_APPLIED');
+      return reviewErrorResponse('SESSION_ALREADY_APPLIED', canApprove.reason!, 409, requestId);
     }
-    return reviewErrorResponse('VALIDATION_ERROR', canApprove.reason!, 400);
+    logger.error(canApprove.reason!, 'VALIDATION_ERROR');
+    logger.complete(400, 'VALIDATION_ERROR');
+    return reviewErrorResponse('VALIDATION_ERROR', canApprove.reason!, 400, requestId);
   }
 
   const previousStatus = session.status;
@@ -1164,14 +1221,16 @@ async function handleReviewApprove(
   // Update status
   await updateSessionStatus(env.NICO_GEO_SESSIONS, sessionId, 'approved');
 
-  const response: ReviewApproveResponse = {
+  const response: ReviewApproveResponse & { requestId: string } = {
     status: 'success',
+    requestId,
     sessionId,
     previousStatus,
     newStatus: 'approved',
   };
 
-  return jsonResponse(response as unknown as RunResponse, 200);
+  logger.complete(200);
+  return jsonResponse(response as unknown as RunResponse, 200, requestId);
 }
 
 /**
@@ -1182,19 +1241,26 @@ async function handleReviewApply(
   sessionId: string,
   request: Request,
   env: Env,
-  keyRecord: ApiKeyRecord
+  keyRecord: ApiKeyRecord,
+  requestId: string,
+  logger: Logger
 ): Promise<Response> {
   // Validate session ID format
   if (!isValidSessionId(sessionId)) {
-    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid session ID format', 400);
+    logger.error('Invalid session ID format', 'VALIDATION_ERROR');
+    logger.complete(400, 'VALIDATION_ERROR');
+    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid session ID format', 400, requestId);
   }
 
   // Pro plan required for apply
   if (keyRecord.plan !== 'pro') {
+    logger.error('Pro plan required', 'PLAN_REQUIRED');
+    logger.complete(403, 'PLAN_REQUIRED');
     return reviewErrorResponse(
       'PLAN_REQUIRED',
       'Review session apply requires a pro plan',
       403,
+      requestId,
       { currentPlan: keyRecord.plan, requiredPlan: 'pro' }
     );
   }
@@ -1202,10 +1268,13 @@ async function handleReviewApply(
   // GitHub token required at apply time (never stored)
   const githubToken = extractGitHubToken(request);
   if (!githubToken) {
+    logger.error('GitHub token required', 'VALIDATION_ERROR');
+    logger.complete(400, 'VALIDATION_ERROR');
     return reviewErrorResponse(
       'VALIDATION_ERROR',
       `GitHub token required in ${GITHUB_TOKEN_HEADER} header`,
-      400
+      400,
+      requestId
     );
   }
 
@@ -1213,7 +1282,9 @@ async function handleReviewApply(
   const result = await getSessionWithExpirationCheck(env.NICO_GEO_SESSIONS, sessionId);
 
   if (!result.found) {
-    return reviewErrorResponse('SESSION_NOT_FOUND', 'Review session not found', 404);
+    logger.error('Session not found', 'SESSION_NOT_FOUND');
+    logger.complete(404, 'SESSION_NOT_FOUND');
+    return reviewErrorResponse('SESSION_NOT_FOUND', 'Review session not found', 404, requestId);
   }
 
   const session = result.session;
@@ -1223,23 +1294,31 @@ async function handleReviewApply(
   if (!canApply.canApply) {
     // Handle idempotent case - already applied
     if (canApply.isIdempotent && session.commitShas) {
-      const response: ReviewApplyResponse = {
+      const response: ReviewApplyResponse & { requestId: string } = {
         status: 'success',
+        requestId,
         sessionId,
         applied: false,
         commitShas: session.commitShas,
         message: 'Session was already applied. Returning existing commit SHAs.',
       };
-      return jsonResponse(response as unknown as RunResponse, 200);
+      logger.complete(200);
+      return jsonResponse(response as unknown as RunResponse, 200, requestId);
     }
 
     if (session.status === 'expired' || result.expired) {
-      return reviewErrorResponse('SESSION_EXPIRED', canApply.reason!, 410);
+      logger.error('Session expired', 'SESSION_EXPIRED');
+      logger.complete(410, 'SESSION_EXPIRED');
+      return reviewErrorResponse('SESSION_EXPIRED', canApply.reason!, 410, requestId);
     }
     if (session.status !== 'approved') {
-      return reviewErrorResponse('SESSION_NOT_APPROVED', canApply.reason!, 400);
+      logger.error('Session not approved', 'SESSION_NOT_APPROVED');
+      logger.complete(400, 'SESSION_NOT_APPROVED');
+      return reviewErrorResponse('SESSION_NOT_APPROVED', canApply.reason!, 400, requestId);
     }
-    return reviewErrorResponse('VALIDATION_ERROR', canApply.reason!, 400);
+    logger.error(canApply.reason!, 'VALIDATION_ERROR');
+    logger.complete(400, 'VALIDATION_ERROR');
+    return reviewErrorResponse('VALIDATION_ERROR', canApply.reason!, 400, requestId);
   }
 
   // Build GitHub config
@@ -1257,10 +1336,13 @@ async function handleReviewApply(
     await verifyWriteAccess(githubConfig);
   } catch (err) {
     if (err instanceof GitHubAPIError) {
+      logger.error(`GitHub access verification failed: ${err.message}`, 'VALIDATION_ERROR');
+      logger.complete(403, 'VALIDATION_ERROR');
       return reviewErrorResponse(
         'VALIDATION_ERROR',
         `GitHub access verification failed: ${err.message}`,
-        403
+        403,
+        requestId
       );
     }
     throw err;
@@ -1281,10 +1363,13 @@ async function handleReviewApply(
   const applyResult = await applyPlannedPatches(githubConfig, plannedChanges, false);
 
   if (!applyResult.success) {
+    logger.error(`Write-back failed: ${applyResult.errors.join(', ')}`, 'INTERNAL_ERROR');
+    logger.complete(500, 'INTERNAL_ERROR');
     return reviewErrorResponse(
       'INTERNAL_ERROR',
       `Write-back failed: ${applyResult.errors.join(', ')}`,
-      500
+      500,
+      requestId
     );
   }
 
@@ -1294,15 +1379,17 @@ async function handleReviewApply(
   // Update session status to applied
   await updateSessionStatus(env.NICO_GEO_SESSIONS, sessionId, 'applied', commitShas);
 
-  const response: ReviewApplyResponse = {
+  const response: ReviewApplyResponse & { requestId: string } = {
     status: 'success',
+    requestId,
     sessionId,
     applied: true,
     commitShas,
     message: `Successfully applied ${applyResult.patchesApplied} patches`,
   };
 
-  return jsonResponse(response as unknown as RunResponse, 200);
+  logger.complete(200);
+  return jsonResponse(response as unknown as RunResponse, 200, requestId);
 }
 
 /**
@@ -1316,7 +1403,9 @@ async function handleReviewApply(
 async function handleReviewRoutes(
   request: Request,
   url: URL,
-  env: Env
+  env: Env,
+  requestId: string,
+  logger: Logger
 ): Promise<Response> {
   const path = url.pathname;
   const method = request.method;
@@ -1326,8 +1415,11 @@ async function handleReviewRoutes(
     // Authenticate
     const authResult = await authenticateRequest(request, env.NICO_GEO_KEYS);
     if (!authResult.valid) {
-      return reviewErrorResponse(authResult.errorCode, authResult.message, 401);
+      logger.error('Authentication failed', authResult.errorCode);
+      logger.complete(401, authResult.errorCode);
+      return reviewErrorResponse(authResult.errorCode, authResult.message, 401, requestId);
     }
+    logger.setKeyId(authResult.keyRecord.keyId);
 
     // Rate limit
     const rateLimitResult = await checkRateLimit(
@@ -1336,21 +1428,26 @@ async function handleReviewRoutes(
       env.RATE_LIMITER
     );
     if (!rateLimitResult.allowed) {
+      logger.error('Rate limit exceeded', rateLimitResult.errorCode);
+      logger.complete(429, rateLimitResult.errorCode);
       return reviewErrorResponse(
         rateLimitResult.errorCode,
         rateLimitResult.message,
         429,
+        requestId,
         { retryAfterSeconds: rateLimitResult.retryAfterSeconds }
       );
     }
 
-    return handleReviewCreate(request, env, authResult.keyRecord);
+    return handleReviewCreate(request, env, authResult.keyRecord, requestId, logger);
   }
 
   // Match /review/{sessionId} patterns
   const sessionMatch = path.match(/^\/review\/([a-f0-9-]+)(\/.*)?$/);
   if (!sessionMatch) {
-    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid review endpoint', 404);
+    logger.error('Invalid review endpoint', 'VALIDATION_ERROR');
+    logger.complete(404, 'VALIDATION_ERROR');
+    return reviewErrorResponse('VALIDATION_ERROR', 'Invalid review endpoint', 404, requestId);
   }
 
   const sessionId = sessionMatch[1];
@@ -1361,10 +1458,13 @@ async function handleReviewRoutes(
     // Authenticate (read access allowed for any valid key)
     const authResult = await authenticateRequest(request, env.NICO_GEO_KEYS);
     if (!authResult.valid) {
-      return reviewErrorResponse(authResult.errorCode, authResult.message, 401);
+      logger.error('Authentication failed', authResult.errorCode);
+      logger.complete(401, authResult.errorCode);
+      return reviewErrorResponse(authResult.errorCode, authResult.message, 401, requestId);
     }
+    logger.setKeyId(authResult.keyRecord.keyId);
 
-    return handleReviewGet(sessionId, env);
+    return handleReviewGet(sessionId, env, requestId, logger);
   }
 
   // POST /review/{sessionId}/approve
@@ -1372,8 +1472,11 @@ async function handleReviewRoutes(
     // Authenticate
     const authResult = await authenticateRequest(request, env.NICO_GEO_KEYS);
     if (!authResult.valid) {
-      return reviewErrorResponse(authResult.errorCode, authResult.message, 401);
+      logger.error('Authentication failed', authResult.errorCode);
+      logger.complete(401, authResult.errorCode);
+      return reviewErrorResponse(authResult.errorCode, authResult.message, 401, requestId);
     }
+    logger.setKeyId(authResult.keyRecord.keyId);
 
     // Rate limit
     const rateLimitResult = await checkRateLimit(
@@ -1382,15 +1485,18 @@ async function handleReviewRoutes(
       env.RATE_LIMITER
     );
     if (!rateLimitResult.allowed) {
+      logger.error('Rate limit exceeded', rateLimitResult.errorCode);
+      logger.complete(429, rateLimitResult.errorCode);
       return reviewErrorResponse(
         rateLimitResult.errorCode,
         rateLimitResult.message,
         429,
+        requestId,
         { retryAfterSeconds: rateLimitResult.retryAfterSeconds }
       );
     }
 
-    return handleReviewApprove(sessionId, env, authResult.keyRecord);
+    return handleReviewApprove(sessionId, env, authResult.keyRecord, requestId, logger);
   }
 
   // POST /review/{sessionId}/apply
@@ -1398,8 +1504,11 @@ async function handleReviewRoutes(
     // Authenticate
     const authResult = await authenticateRequest(request, env.NICO_GEO_KEYS);
     if (!authResult.valid) {
-      return reviewErrorResponse(authResult.errorCode, authResult.message, 401);
+      logger.error('Authentication failed', authResult.errorCode);
+      logger.complete(401, authResult.errorCode);
+      return reviewErrorResponse(authResult.errorCode, authResult.message, 401, requestId);
     }
+    logger.setKeyId(authResult.keyRecord.keyId);
 
     // Rate limit
     const rateLimitResult = await checkRateLimit(
@@ -1408,19 +1517,24 @@ async function handleReviewRoutes(
       env.RATE_LIMITER
     );
     if (!rateLimitResult.allowed) {
+      logger.error('Rate limit exceeded', rateLimitResult.errorCode);
+      logger.complete(429, rateLimitResult.errorCode);
       return reviewErrorResponse(
         rateLimitResult.errorCode,
         rateLimitResult.message,
         429,
+        requestId,
         { retryAfterSeconds: rateLimitResult.retryAfterSeconds }
       );
     }
 
-    return handleReviewApply(sessionId, request, env, authResult.keyRecord);
+    return handleReviewApply(sessionId, request, env, authResult.keyRecord, requestId, logger);
   }
 
   // Unknown review endpoint
-  return reviewErrorResponse('VALIDATION_ERROR', 'Invalid review endpoint or method', 404);
+  logger.error('Invalid review endpoint or method', 'VALIDATION_ERROR');
+  logger.complete(404, 'VALIDATION_ERROR');
+  return reviewErrorResponse('VALIDATION_ERROR', 'Invalid review endpoint or method', 404, requestId);
 }
 
 /**
@@ -1429,30 +1543,75 @@ async function handleReviewRoutes(
 async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
 
+  // Get or create request ID early
+  const requestId = getOrCreateRequestId(request);
+  const logger = createLogger(request, requestId);
+
   // Handle CORS preflight
   if (request.method === 'OPTIONS') {
+    const headers = new Headers(CORS_HEADERS);
+    headers.set(REQUEST_ID_HEADER, requestId);
     return new Response(null, {
       status: 204,
-      headers: CORS_HEADERS,
+      headers,
     });
+  }
+
+  // ============================================
+  // ROUTE: GET /health (No auth, no rate limit)
+  // ============================================
+  if (url.pathname === '/health' && request.method === 'GET') {
+    logger.complete(200);
+    return jsonResponse({ status: 'ok' } as unknown as RunResponse, 200, requestId);
+  }
+
+  // ============================================
+  // ROUTE: GET /version (No auth, no rate limit)
+  // ============================================
+  if (url.pathname === '/version' && request.method === 'GET') {
+    logger.complete(200);
+    return jsonResponse({
+      version: VERSION_INFO.version,
+      buildTime: VERSION_INFO.buildTime,
+      gitSha: VERSION_INFO.gitSha,
+    } as unknown as RunResponse, 200, requestId);
   }
 
   // ============================================
   // ROUTE: /review/* (Review Session Endpoints)
   // ============================================
   if (url.pathname.startsWith('/review')) {
-    return handleReviewRoutes(request, url, env);
+    return handleReviewRoutes(request, url, env, requestId, logger);
   }
 
   // ============================================
   // ROUTE: POST /run (Main API Endpoint)
   // ============================================
   if (request.method !== 'POST') {
-    return apiErrorResponse('VALIDATION_ERROR', 'Method not allowed. Use POST.', 405);
+    logger.error('Method not allowed', 'VALIDATION_ERROR');
+    logger.complete(405, 'VALIDATION_ERROR');
+    return apiErrorResponse('VALIDATION_ERROR', 'Method not allowed. Use POST.', 405, requestId);
   }
 
   if (url.pathname !== '/run') {
-    return apiErrorResponse('VALIDATION_ERROR', 'Not found. Use POST /run', 404);
+    logger.error('Route not found', 'VALIDATION_ERROR');
+    logger.complete(404, 'VALIDATION_ERROR');
+    return apiErrorResponse('VALIDATION_ERROR', 'Not found. Use POST /run', 404, requestId);
+  }
+
+  // ============================================
+  // PAYLOAD SIZE GUARD
+  // ============================================
+  const contentLength = request.headers.get('content-length');
+  if (isPayloadTooLarge(contentLength)) {
+    logger.error('Payload too large', 'PAYLOAD_TOO_LARGE', { contentLength: contentLength || 'unknown' });
+    logger.complete(413, 'PAYLOAD_TOO_LARGE');
+    return apiErrorResponse(
+      'PAYLOAD_TOO_LARGE',
+      `Request payload exceeds maximum allowed size of ${MAX_PAYLOAD_SIZE_BYTES} bytes`,
+      413,
+      requestId
+    );
   }
 
   // ============================================
@@ -1460,10 +1619,13 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   // ============================================
   const authResult = await authenticateRequest(request, env.NICO_GEO_KEYS);
   if (!authResult.valid) {
-    return apiErrorResponse(authResult.errorCode, authResult.message, 401);
+    logger.error('Authentication failed', authResult.errorCode);
+    logger.complete(401, authResult.errorCode);
+    return apiErrorResponse(authResult.errorCode, authResult.message, 401, requestId);
   }
 
   const keyRecord = authResult.keyRecord;
+  logger.setKeyId(keyRecord.keyId);
 
   // ============================================
   // RATE LIMITING
@@ -1475,10 +1637,13 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   );
 
   if (!rateLimitResult.allowed) {
+    logger.error('Rate limit exceeded', rateLimitResult.errorCode);
+    logger.complete(429, rateLimitResult.errorCode);
     return apiErrorResponse(
       rateLimitResult.errorCode,
       rateLimitResult.message,
       429,
+      requestId,
       {
         retryAfterSeconds: rateLimitResult.retryAfterSeconds,
         usage: toUsageInfo(rateLimitResult.usage),
@@ -1493,23 +1658,31 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   try {
     body = await request.json();
   } catch {
-    return apiErrorResponse('VALIDATION_ERROR', 'Invalid JSON in request body', 400);
+    logger.error('Invalid JSON body', 'VALIDATION_ERROR');
+    logger.complete(400, 'VALIDATION_ERROR');
+    return apiErrorResponse('VALIDATION_ERROR', 'Invalid JSON in request body', 400, requestId);
   }
 
   // Validate request structure
   const validation = validateRequest(body);
   if (!validation.valid) {
-    return apiErrorResponse('VALIDATION_ERROR', validation.error, 400);
+    logger.error(validation.error, 'VALIDATION_ERROR');
+    logger.complete(400, 'VALIDATION_ERROR');
+    return apiErrorResponse('VALIDATION_ERROR', validation.error, 400, requestId);
   }
 
   const runRequest = validation.request;
+  logger.setMode(runRequest.mode);
 
   // Enforce noHallucinations constraint
   if (!runRequest.constraints.noHallucinations) {
+    logger.error('noHallucinations must be true', 'VALIDATION_ERROR');
+    logger.complete(400, 'VALIDATION_ERROR');
     return apiErrorResponse(
       'VALIDATION_ERROR',
       'constraints.noHallucinations must be true',
-      400
+      400,
+      requestId
     );
   }
 
@@ -1517,10 +1690,13 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   // PLAN GATING: Write-back requires pro plan
   // ============================================
   if (runRequest.writeBack === true && keyRecord.plan !== 'pro') {
+    logger.error('Write-back requires pro plan', 'PLAN_REQUIRED');
+    logger.complete(403, 'PLAN_REQUIRED');
     return apiErrorResponse(
       'PLAN_REQUIRED',
       'Write-back feature requires a pro plan. Upgrade to enable write-back.',
       403,
+      requestId,
       { currentPlan: keyRecord.plan, requiredPlan: 'pro' }
     );
   }
@@ -1543,23 +1719,30 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
         response = await handleAuditMode(runRequest);
         break;
       default:
+        logger.error(`Unsupported mode: ${runRequest.mode}`, 'VALIDATION_ERROR');
+        logger.complete(400, 'VALIDATION_ERROR');
         return apiErrorResponse(
           'VALIDATION_ERROR',
           `Unsupported mode: ${runRequest.mode}`,
-          400
+          400,
+          requestId
         );
     }
 
-    // Add usage info to successful response
-    const responseWithUsage: RunResponseWithUsage = {
+    // Add usage info and requestId to successful response
+    const responseWithUsage: RunResponseWithUsage & { requestId: string } = {
       ...response,
+      requestId,
       usage: toUsageInfo(usage),
     };
 
-    return jsonResponse(responseWithUsage, 200);
+    logger.complete(200);
+    return jsonResponse(responseWithUsage, 200, requestId);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error occurred';
-    return apiErrorResponse('INTERNAL_ERROR', message, 500);
+    logger.error(message, 'INTERNAL_ERROR');
+    logger.complete(500, 'INTERNAL_ERROR');
+    return apiErrorResponse('INTERNAL_ERROR', message, 500, requestId);
   }
 }
 

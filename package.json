@@ -4,7 +4,8 @@
   "description": "GEO content generation engine",
   "private": true,
   "scripts": {
-    "run:geo": "ts-node scripts/runGeoPipeline.ts"
+    "run:geo": "ts-node scripts/runGeoPipeline.ts",
+    "test:smoke": "ts-node scripts/ciSmoke.ts"
   },
   "devDependencies": {
     "ts-node": "^10.9.2",

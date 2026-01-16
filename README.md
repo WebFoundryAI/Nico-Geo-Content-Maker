@@ -291,3 +291,78 @@ Additional error codes for review endpoints:
 4. **Apply**: `POST /review/{id}/apply` writes changes to GitHub (pro plan, requires GitHub token)
 
 Sessions are immutable after creation. The apply endpoint is idempotent - if already applied, it returns existing commit SHAs.
+
+## Operations
+
+### Health and Version Endpoints
+
+Two lightweight endpoints are available without authentication:
+
+```bash
+# Health check
+curl https://your-worker.workers.dev/health
+# Response: { "status": "ok" }
+
+# Version info
+curl https://your-worker.workers.dev/version
+# Response: { "version": "0.1.0", "buildTime": "2024-01-01T00:00:00Z", "gitSha": "development" }
+```
+
+### Request Tracing
+
+All requests include a `x-request-id` header in responses. To trace a request:
+- Send your own ID: `curl -H "x-request-id: my-trace-123" ...`
+- Or let the API generate one and check the response header
+
+All error responses include the `requestId` field for correlation.
+
+### Required Cloudflare Bindings
+
+The Worker requires the following bindings configured in `wrangler.toml`:
+
+| Binding | Type | Purpose |
+|---------|------|---------|
+| `NICO_GEO_KEYS` | KV Namespace | API key storage and validation |
+| `NICO_GEO_SESSIONS` | KV Namespace | Review session storage (24h TTL) |
+| `RATE_LIMITER` | Durable Object | Per-key rate limiting state |
+
+To create KV namespaces:
+
+```bash
+wrangler kv:namespace create "NICO_GEO_KEYS"
+wrangler kv:namespace create "NICO_GEO_SESSIONS"
+```
+
+### Running Local Smoke Tests
+
+Run offline smoke tests to verify core modules:
+
+```bash
+npm run test:smoke
+```
+
+This runs `scripts/ciSmoke.ts` which:
+- Imports and validates core modules (validator, scorer, path contract)
+- Tests basic functionality with mock data
+- Requires no internet access
+- Exits with code 0 on success, 1 on failure
+
+### Payload Limits
+
+- Maximum request payload: 1 MB
+- Requests exceeding this limit receive HTTP 413 with `PAYLOAD_TOO_LARGE` error code
+
+### Structured Logging
+
+The Worker outputs structured JSON logs with fields:
+- `timestamp`: ISO UTC timestamp
+- `requestId`: Request trace ID
+- `route`: Request path
+- `method`: HTTP method
+- `statusCode`: Response status
+- `durationMs`: Request duration
+- `keyId`: Authenticated key ID (never the raw key)
+- `mode`: Request mode (generate/audit/improve)
+- `errorCode`: Error code if applicable
+
+Sensitive data (tokens, full request bodies) is never logged.
