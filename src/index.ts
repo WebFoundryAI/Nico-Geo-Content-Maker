@@ -564,18 +564,27 @@ function runAuditRules(ctx: AuditContext): Issue[] {
     });
   }
 
-  // H1 lacks geo + service modifiers
+  // H1 lacks geo + service modifiers (Opportunity - H1 exists but not optimized)
   if (hp.h1Text) {
     const h1Lower = hp.h1Text.toLowerCase();
     const h1HasGeo = GEO_CITY_TERMS.some(term => h1Lower.includes(term.toLowerCase()));
     const h1HasService = SERVICE_INDUSTRY_TERMS.some(term => h1Lower.includes(term.toLowerCase()));
-    if (!h1HasGeo || !h1HasService) {
+    if (!h1HasGeo && !h1HasService) {
       issues.push({
-        title: 'H1 Lacks Geo + Service Modifiers',
+        title: 'H1 Missing Geo & Service Keywords',
         priority: 'medium',
-        evidence: `H1 text: "${hp.h1Text}"${!h1HasGeo ? ' - missing location' : ''}${!h1HasService ? ' - missing service keyword' : ''}`,
+        evidence: `H1 text: "${hp.h1Text}" - lacks both location and service terms`,
         impact: 'Limits geo relevance for AI and local search.',
         recommendation: 'Include primary service + city in the H1: "Professional [Service] in [City]"',
+      });
+    } else if (!h1HasGeo || !h1HasService) {
+      // Opportunity: H1 is partially optimized
+      issues.push({
+        title: 'H1 Could Be More Optimized',
+        priority: 'low',
+        evidence: `H1 text: "${hp.h1Text}"${!h1HasGeo ? ' - consider adding location' : ''}${!h1HasService ? ' - consider adding service keyword' : ''}`,
+        impact: 'Adding both service and location to H1 maximizes local SEO impact.',
+        recommendation: 'Strengthen H1 with both service type and city name.',
       });
     }
   }
@@ -1191,6 +1200,144 @@ function runAuditRules(ctx: AuditContext): Issue[] {
         recommendation: 'Implement LocalBusiness or Organization JSON-LD schema.',
       });
     }
+  }
+
+  // ============================================================
+  // OPPORTUNITY CHECKS (weak-but-passing signals)
+  // ============================================================
+
+  // Opportunity: Schema exists but missing serviceArea/areaServed
+  if (hp.hasLocalBusinessSchema || hp.hasOrganizationSchema) {
+    const schemaStr = hp.schemaDetails.join(' ').toLowerCase();
+    const hasAreaServed = schemaStr.includes('areaserved') || schemaStr.includes('servicearea') || schemaStr.includes('geo');
+    if (!hasAreaServed) {
+      issues.push({
+        title: 'Schema Missing Service Area',
+        priority: 'medium',
+        evidence: `Business schema found but no areaServed/serviceArea property detected`,
+        impact: 'Adding areaServed helps AI understand your geographic coverage.',
+        recommendation: 'Add areaServed property to your LocalBusiness schema with cities/regions you serve.',
+      });
+    }
+  }
+
+  // Opportunity: Title exists but structure could be better
+  if (hp.title && hp.title.length >= 10) {
+    const hasDelimiter = hp.title.includes('|') || hp.title.includes('-') || hp.title.includes('–');
+    const titleHasService = SERVICE_INDUSTRY_TERMS.some(t => hp.title.toLowerCase().includes(t.toLowerCase()));
+    if (!hasDelimiter && hp.title.length < 50) {
+      issues.push({
+        title: 'Title Structure Could Be Improved',
+        priority: 'low',
+        evidence: `Title "${hp.title}" lacks standard SEO structure (service | location | brand)`,
+        impact: 'Well-structured titles perform better in search results.',
+        recommendation: 'Use format: "Primary Service in City | Brand Name" with pipe or dash separator.',
+      });
+    }
+    if (hasDelimiter && !titleHasService && hasGeoInTitle) {
+      issues.push({
+        title: 'Title Could Include Service Type',
+        priority: 'low',
+        evidence: `Title has location but no specific service keyword`,
+        impact: 'Including service type in title improves relevance for service queries.',
+        recommendation: 'Add your primary service to the title before the location.',
+      });
+    }
+  }
+
+  // Opportunity: Meta description adequate (100-140) but not optimal (150-160)
+  if (hp.metaDescription && hp.metaDescription.length >= 100 && hp.metaDescription.length < 140) {
+    issues.push({
+      title: 'Meta Description Could Be Longer',
+      priority: 'low',
+      evidence: `Meta description is ${hp.metaDescription.length} chars (optimal: 150-160)`,
+      impact: 'Longer descriptions provide more context and keyword opportunities.',
+      recommendation: 'Expand to 150-160 chars to maximize SERP real estate.',
+    });
+  }
+
+  // Opportunity: Content adequate (500-800) but below competitive threshold (1000+)
+  if (hp.wordCount >= 500 && hp.wordCount < 800) {
+    issues.push({
+      title: 'Content Depth Opportunity',
+      priority: 'low',
+      evidence: `Homepage has ${hp.wordCount} words - adequate but below competitive threshold`,
+      impact: 'Top-ranking pages often have 1000+ words of quality content.',
+      recommendation: 'Consider adding: detailed FAQs, service process explanation, or case studies.',
+    });
+  }
+
+  // Opportunity: Content good (800-1000) but could be more comprehensive
+  if (hp.wordCount >= 800 && hp.wordCount < 1000) {
+    issues.push({
+      title: 'Content Nearly Optimal',
+      priority: 'low',
+      evidence: `Homepage has ${hp.wordCount} words - good, but competitive pages average 1000-1500`,
+      impact: 'A bit more content could help you outrank competitors.',
+      recommendation: 'Add 200-400 more words covering FAQs, testimonial context, or service details.',
+    });
+  }
+
+  // Opportunity: Internal links exist (10+) but many have generic anchors
+  if (hp.internalLinkCount >= 10) {
+    const genericAnchors = hp.anchorTexts.filter(a => {
+      const lower = a.toLowerCase().trim();
+      return lower === 'learn more' || lower === 'read more' || lower === 'click here' ||
+             lower === 'here' || lower === 'more' || lower === 'view' || lower === 'see more' ||
+             lower.length < 3;
+    });
+    const genericRatio = genericAnchors.length / hp.anchorTexts.length;
+    if (genericRatio > 0.2 && genericAnchors.length > 3) {
+      issues.push({
+        title: 'Internal Link Anchors Could Be More Descriptive',
+        priority: 'medium',
+        evidence: `${genericAnchors.length} of ${hp.anchorTexts.length} link anchors are generic ("learn more", "click here", etc.)`,
+        impact: 'Descriptive anchors help search engines understand linked content better.',
+        recommendation: 'Replace generic anchors with descriptive text like "our plumbing services" or "drain cleaning in [City]".',
+      });
+    }
+  }
+
+  // Opportunity: Has phone but not in clickable tel: format (check body for tel:)
+  if (hp.hasPhone) {
+    const hasTelLink = hp.bodyText.includes('tel:') || hp.bodyText.includes('href="tel');
+    if (!hasTelLink) {
+      issues.push({
+        title: 'Phone Number May Not Be Clickable',
+        priority: 'low',
+        evidence: `Phone number found but no tel: link detected in HTML`,
+        impact: 'Mobile users expect tap-to-call functionality.',
+        recommendation: 'Wrap phone numbers in clickable tel: links: <a href="tel:+1234567890">',
+      });
+    }
+  }
+
+  // Opportunity: Has some H2s but none contain geo terms
+  if (hp.h2s.length >= 2) {
+    const h2sWithGeo = hp.h2s.filter(h2 =>
+      GEO_CITY_TERMS.some(term => h2.toLowerCase().includes(term.toLowerCase()))
+    );
+    if (h2sWithGeo.length === 0) {
+      issues.push({
+        title: 'Subheadings Could Include Location',
+        priority: 'low',
+        evidence: `${hp.h2s.length} H2 subheadings found, but none mention your service area`,
+        impact: 'Location in subheadings reinforces local relevance.',
+        recommendation: 'Add location to at least one H2: "Our Services in [City]" or "Why [City] Trusts Us".',
+      });
+    }
+  }
+
+  // Opportunity: Images have alt text but none are geo-optimized
+  if (hp.imagesWithAlt > 0) {
+    // This is a general opportunity since we can't easily check alt text content
+    issues.push({
+      title: 'Image Alt Text Optimization',
+      priority: 'low',
+      evidence: `${hp.imagesWithAlt} images have alt text - verify they include service/location keywords`,
+      impact: 'Geo-optimized alt text helps with image search and reinforces local relevance.',
+      recommendation: 'Use descriptive alts like "plumber fixing sink in [City]" instead of generic "plumber at work".',
+    });
   }
 
   return issues;
