@@ -654,7 +654,7 @@ function runAuditRules(ctx: AuditContext): Issue[] {
     });
   }
 
-  // Missing contact info
+  // Missing contact info (both phone and email)
   if (!hp.hasPhone && !hp.hasEmail) {
     issues.push({
       title: 'No Contact Information Visible',
@@ -662,6 +662,28 @@ function runAuditRules(ctx: AuditContext): Issue[] {
       evidence: 'No phone number or email detected on homepage',
       impact: 'Contact info is essential for local SEO and trust. AI may not recommend without it.',
       recommendation: 'Add phone and email prominently in header, footer, and contact section.',
+    });
+  }
+
+  // Missing phone specifically (important for local businesses)
+  if (!hp.hasPhone && hp.hasEmail) {
+    issues.push({
+      title: 'No Phone Number Visible',
+      priority: 'medium',
+      evidence: `Email found (${hp.emails[0]}) but no phone number detected`,
+      impact: 'Phone numbers are critical for local SEO and immediate customer contact.',
+      recommendation: 'Add a clickable phone number in header and footer.',
+    });
+  }
+
+  // Missing email specifically
+  if (hp.hasPhone && !hp.hasEmail) {
+    issues.push({
+      title: 'No Email Address Visible',
+      priority: 'low',
+      evidence: `Phone found (${hp.phoneNumbers[0]}) but no email detected`,
+      impact: 'Some customers prefer email contact. Offering multiple options increases leads.',
+      recommendation: 'Add a professional email address to your contact section.',
     });
   }
 
@@ -705,6 +727,17 @@ function runAuditRules(ctx: AuditContext): Issue[] {
         recommendation: 'Add descriptive alt text to all images: alt="[Service] technician in [City]"',
       });
     }
+  }
+
+  // No images at all (visual content helps engagement)
+  if (hp.imageCount === 0 && hp.wordCount > 200) {
+    issues.push({
+      title: 'No Images on Homepage',
+      priority: 'medium',
+      evidence: 'Homepage has no <img> tags detected',
+      impact: 'Visual content increases engagement and helps users understand your services.',
+      recommendation: 'Add relevant images: team photos, service examples, before/after shots, trust badges.',
+    });
   }
 
   // Flat heading structure
@@ -843,9 +876,9 @@ function runAuditRules(ctx: AuditContext): Issue[] {
   // ADDITIONAL CHECKS (ensure 10+ issues for most sites)
   // ============================================================
 
-  // Check for FAQ schema (important for AI visibility)
+  // Check for FAQ schema (important for AI visibility - fire for any site)
   const hasFAQSchema = hp.jsonLdTypes.some(t => t.toLowerCase().includes('faq'));
-  if (!hasFAQSchema && hp.wordCount > 300) {
+  if (!hasFAQSchema) {
     issues.push({
       title: 'Missing FAQ Schema',
       priority: 'medium',
@@ -855,13 +888,13 @@ function runAuditRules(ctx: AuditContext): Issue[] {
     });
   }
 
-  // Check for breadcrumb schema
+  // Check for breadcrumb schema (important for any site with multiple pages)
   const hasBreadcrumbSchema = hp.jsonLdTypes.some(t => t.toLowerCase().includes('breadcrumb'));
-  if (!hasBreadcrumbSchema && ctx.crawledPages.length > 0) {
+  if (!hasBreadcrumbSchema) {
     issues.push({
       title: 'Missing Breadcrumb Schema',
       priority: 'low',
-      evidence: 'No BreadcrumbList schema detected on site',
+      evidence: 'No BreadcrumbList schema detected on homepage',
       impact: 'Breadcrumb schema improves site structure understanding and search appearance.',
       recommendation: 'Add BreadcrumbList schema to all pages showing navigation hierarchy.',
     });
@@ -904,14 +937,25 @@ function runAuditRules(ctx: AuditContext): Issue[] {
     });
   }
 
-  // Check for service area specificity
-  if (hp.hasGeoKeywords && hp.geoTermsFound.length < 3) {
+  // Check for service area specificity (fire for any local business site)
+  if (hp.geoTermsFound.length > 0 && hp.geoTermsFound.length < 3) {
     issues.push({
       title: 'Limited Service Area Coverage',
       priority: 'medium',
       evidence: `Only ${hp.geoTermsFound.length} location terms found: ${hp.geoTermsFound.join(', ')}`,
       impact: 'Mentioning more specific areas helps AI recommend you for hyper-local queries.',
       recommendation: 'Add neighborhoods, districts, and nearby towns you serve.',
+    });
+  }
+
+  // Check for no geo terms at all (different from above - total absence)
+  if (hp.geoTermsFound.length === 0) {
+    issues.push({
+      title: 'No Service Area Mentioned',
+      priority: 'high',
+      evidence: 'No city names, neighborhoods, or location phrases found anywhere on page',
+      impact: 'Without any location mentions, AI cannot determine where you operate.',
+      recommendation: 'Add your primary city to title, H1, meta description, and body content.',
     });
   }
 
@@ -926,15 +970,16 @@ function runAuditRules(ctx: AuditContext): Issue[] {
     });
   }
 
-  // Check for pricing/cost signals (important for service businesses)
+  // Check for pricing/cost signals (important for any business site)
   const hasPricingSignals = bodyLower.includes('price') || bodyLower.includes('cost') ||
                             bodyLower.includes('quote') || bodyLower.includes('estimate') ||
-                            bodyLower.includes('£') || bodyLower.includes('$');
-  if (!hasPricingSignals && hp.hasServiceKeywords) {
+                            bodyLower.includes('£') || bodyLower.includes('$') ||
+                            bodyLower.includes('free') || bodyLower.includes('rate');
+  if (!hasPricingSignals && hp.wordCount > 200) {
     issues.push({
       title: 'No Pricing Information',
       priority: 'medium',
-      evidence: 'No pricing, cost, or quote-related terms found on homepage',
+      evidence: 'No pricing, cost, quote, or rate-related terms found on homepage',
       impact: 'Users and AI want to understand pricing. Missing info reduces conversion.',
       recommendation: 'Add pricing ranges, "free estimate" messaging, or "call for quote" CTAs.',
     });
