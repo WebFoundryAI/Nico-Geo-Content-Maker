@@ -11,10 +11,18 @@
  *   - "audit": Analyze existing site for GEO gaps
  *   - "improve": Generate patch-ready improvement blocks (with optional write-back)
  *
+ * AUTHENTICATION:
+ * - All requests require: Authorization: Bearer <api_key>
+ * - Keys are validated against NICO_GEO_KEYS KV namespace
+ *
+ * RATE LIMITS (per key):
+ * - free: 20 requests/day, 2/minute burst
+ * - pro: 500 requests/day, 30/minute burst
+ *
  * CONSTRAINTS:
  * - Never writes files locally
  * - Never infers or fabricates data
- * - Write-back is opt-in and requires explicit configuration
+ * - Write-back is opt-in, requires pro plan and explicit configuration
  * - No secrets stored in code
  */
 
@@ -25,10 +33,22 @@ import { validateGEOOutput } from '../contracts/output.contract';
 import { crawlSite, DEFAULT_CRAWLER_CONFIG } from '../core/ingest/siteCrawler';
 import { analyzeGeoGaps } from '../core/analyze/geoGapAnalyzer';
 import { planSiteImprovements } from '../core/analyze/improvementPlanner';
-import { verifyWriteAccess, GitHubAPIError } from '../core/writeback/githubClient';
-import { generatePatches, applyPatches } from '../core/writeback/patchApplier';
+import {
+  verifyWriteAccess,
+  getFileContents,
+  decodeContent,
+  GitHubAPIError,
+} from '../core/writeback/githubClient';
+import {
+  generatePatches,
+  applyPatches,
+  planPatches,
+  applyPlannedPatches,
+} from '../core/writeback/patchApplier';
+import { mapUrlToFilePath, PathMappingError } from '../core/writeback/pathContract';
 import type { GitHubClientConfig } from '../core/writeback/githubClient';
-import type { PatchApplierConfig } from '../core/writeback/patchApplier';
+import type { PatchApplierConfig, PatchPlanConfig } from '../core/writeback/patchApplier';
+import type { PathContractConfig } from '../core/writeback/pathContract';
 import type {
   RunRequest,
   RunResponse,
@@ -41,8 +61,29 @@ import type {
   WriteBackResult,
   TargetRepoConfig,
   WriteBackConfig,
+  ApiErrorResponse,
+  ApiErrorCode,
+  UsageInfo,
+  RunResponseWithUsage,
 } from './types';
 import { isValidMode, isValidConstraints, isValidTargetRepo } from './types';
+import { authenticateRequest, type KVNamespace, type ApiKeyRecord } from './auth';
+import { checkRateLimit, type DurableObjectNamespace, type UsageState, RATE_LIMITS } from './rateLimit';
+import { validateGscSnapshot, type GscSnapshotRow } from '../core/intelligence/gscSnapshot.types';
+import { matchGscToPages, normalizePath } from '../core/intelligence/gscSnapshot.normalise';
+import { scorePages, type PageScoringInput } from '../core/intelligence/opportunityScorer';
+import { generateActionQueue, selectTopTargets } from '../core/intelligence/actionQueue';
+import type { ActionQueueItem } from './types';
+
+/**
+ * Environment bindings for the Worker.
+ */
+export interface Env {
+  /** KV namespace for API keys */
+  NICO_GEO_KEYS: KVNamespace;
+  /** Durable Object namespace for rate limiting */
+  RATE_LIMITER: DurableObjectNamespace;
+}
 
 /**
  * Header name for GitHub token.
@@ -50,22 +91,42 @@ import { isValidMode, isValidConstraints, isValidTargetRepo } from './types';
 const GITHUB_TOKEN_HEADER = 'X-GitHub-Token';
 
 /**
+ * Header name for Authorization.
+ */
+const AUTH_HEADER = 'Authorization';
+
+/**
+ * CORS headers for all responses.
+ */
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': `Content-Type, ${AUTH_HEADER}, ${GITHUB_TOKEN_HEADER}`,
+};
+
+/**
+ * Default number of auto-selected targets when using GSC snapshot in improve mode.
+ */
+const DEFAULT_AUTO_SELECT_TARGETS = 5;
+
+/**
  * Creates a JSON response with proper headers.
  */
-function jsonResponse(data: RunResponse | ErrorResponse, status: number = 200): Response {
+function jsonResponse(
+  data: RunResponse | RunResponseWithUsage | ErrorResponse | ApiErrorResponse,
+  status: number = 200
+): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
       'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': `Content-Type, ${GITHUB_TOKEN_HEADER}`,
+      ...CORS_HEADERS,
     },
   });
 }
 
 /**
- * Creates an error response.
+ * Creates an error response (legacy format).
  */
 function errorResponse(message: string, mode: RunMode | null = null, status: number = 400): Response {
   const body: ErrorResponse = {
@@ -76,6 +137,38 @@ function errorResponse(message: string, mode: RunMode | null = null, status: num
     error: message,
   };
   return jsonResponse(body, status);
+}
+
+/**
+ * Creates a structured API error response.
+ */
+function apiErrorResponse(
+  errorCode: ApiErrorCode,
+  message: string,
+  status: number,
+  details?: Record<string, unknown>
+): Response {
+  const body: ApiErrorResponse = {
+    status: 'error',
+    errorCode,
+    message,
+    ...(details && { details }),
+  };
+  return jsonResponse(body, status);
+}
+
+/**
+ * Converts UsageState to UsageInfo for response.
+ */
+function toUsageInfo(usage: UsageState): UsageInfo {
+  return {
+    keyId: usage.keyId,
+    plan: usage.plan,
+    requestsToday: usage.requestsToday,
+    dailyLimit: usage.dailyLimit,
+    minuteWindowCount: usage.minuteWindowCount,
+    minuteWindowLimit: usage.minuteWindowLimit,
+  };
 }
 
 /**
@@ -142,7 +235,36 @@ function validateRequest(body: unknown): { valid: true; request: RunRequest } | 
       return { valid: false, error: 'Write-back requires targetRepo configuration' };
     }
     if (!isValidTargetRepo(obj.targetRepo)) {
-      return { valid: false, error: 'targetRepo must include owner, repo, and branch' };
+      return { valid: false, error: 'targetRepo must include owner, repo, branch, projectType (astro-pages|static-html), and routeStrategy (path-index|flat-html)' };
+    }
+  }
+
+  // Validate gscSnapshot if provided (only for audit/improve modes)
+  let validatedGscRows: GscSnapshotRow[] | undefined;
+  if (obj.gscSnapshot !== undefined) {
+    if (mode === 'generate') {
+      return { valid: false, error: 'gscSnapshot is not supported for "generate" mode' };
+    }
+    const gscValidation = validateGscSnapshot(obj.gscSnapshot);
+    if (!gscValidation.valid && gscValidation.errors.length > 0) {
+      const errorSummary = gscValidation.errors.slice(0, 3).map(e => `row ${e.rowIndex}: ${e.message}`).join('; ');
+      return { valid: false, error: `Invalid gscSnapshot: ${errorSummary}` };
+    }
+    validatedGscRows = gscValidation.validRows;
+  }
+
+  // Validate targetPaths if provided (only for improve mode)
+  if (obj.targetPaths !== undefined) {
+    if (mode !== 'improve') {
+      return { valid: false, error: 'targetPaths is only supported for "improve" mode' };
+    }
+    if (!Array.isArray(obj.targetPaths)) {
+      return { valid: false, error: 'targetPaths must be an array of path strings' };
+    }
+    for (const p of obj.targetPaths) {
+      if (typeof p !== 'string' || p.length === 0) {
+        return { valid: false, error: 'targetPaths must contain non-empty strings' };
+      }
     }
   }
 
@@ -154,8 +276,11 @@ function validateRequest(body: unknown): { valid: true; request: RunRequest } | 
       businessInput: obj.businessInput as BusinessInput | undefined,
       constraints: obj.constraints as RunRequest['constraints'],
       writeBack: obj.writeBack as boolean | undefined,
+      diffPreview: obj.diffPreview as boolean | undefined,
       targetRepo: obj.targetRepo as TargetRepoConfig | undefined,
       writeBackConfig: obj.writeBackConfig as WriteBackConfig | undefined,
+      gscSnapshot: validatedGscRows,
+      targetPaths: obj.targetPaths as string[] | undefined,
     },
   };
 }
@@ -168,8 +293,81 @@ function extractGitHubToken(request: Request): string | null {
 }
 
 /**
+ * Fetches existing file contents from GitHub for planning.
+ */
+async function fetchExistingContents(
+  githubConfig: GitHubClientConfig,
+  filePaths: string[]
+): Promise<Map<string, string | null>> {
+  const contents = new Map<string, string | null>();
+
+  for (const filePath of filePaths) {
+    try {
+      const fileContent = await getFileContents(githubConfig, filePath);
+      if (fileContent) {
+        contents.set(filePath, decodeContent(fileContent.content));
+      } else {
+        contents.set(filePath, null);
+      }
+    } catch {
+      // File doesn't exist or can't be read
+      contents.set(filePath, null);
+    }
+  }
+
+  return contents;
+}
+
+/**
+ * Builds an action queue from gap analysis pages and optional GSC data.
+ */
+function buildActionQueue(
+  pages: Array<{
+    url: string;
+    geoScore: number;
+    gaps: Array<{ flag: string; severity?: string }>;
+  }>,
+  gscSnapshot?: GscSnapshotRow[]
+): { items: ActionQueueItem[]; summary: { totalPagesAnalyzed: number; pagesWithGscData: number; averageScore: number } } {
+  // Get URLs from pages
+  const urls = pages.map(p => p.url);
+
+  // Match GSC data if provided
+  const gscMatches = gscSnapshot ? matchGscToPages(urls, gscSnapshot) : [];
+  const gscMatchMap = new Map(gscMatches.map(m => [m.path, m]));
+
+  // Build scoring inputs
+  const scoringInputs: PageScoringInput[] = pages.map(page => {
+    const normalizedPath = normalizePath(page.url);
+    const gscMatch = gscMatchMap.get(normalizedPath);
+
+    return {
+      url: page.url,
+      path: normalizedPath,
+      geoScore: page.geoScore,
+      gapFlags: page.gaps.map(g => g.flag),
+      gscMetrics: gscMatch?.gscMetrics || null,
+    };
+  });
+
+  // Score and generate action queue
+  const scoredPages = scorePages(scoringInputs);
+  const actionQueueResult = generateActionQueue(scoredPages);
+
+  return {
+    items: actionQueueResult.items,
+    summary: {
+      totalPagesAnalyzed: actionQueueResult.totalPagesAnalyzed,
+      pagesWithGscData: actionQueueResult.pagesWithGscData,
+      averageScore: actionQueueResult.averageScore,
+    },
+  };
+}
+
+/**
  * Handles "improve" mode execution.
  * Crawls site, generates patch-ready improvement blocks, and optionally writes back to GitHub.
+ * Supports diff preview and idempotent block updates via path contract.
  */
 async function handleImproveMode(
   request: RunRequest,
@@ -183,24 +381,188 @@ async function handleImproveMode(
   const maxPages = request.constraints.maxPages ?? DEFAULT_CRAWLER_CONFIG.maxPages;
   const crawlResult = await crawlSite(request.siteUrl, { maxPages });
 
-  // Generate improvement plan
-  const improvementPlan = planSiteImprovements(crawlResult);
+  // Run gap analysis first (needed for action queue)
+  const gapAnalysis = analyzeGeoGaps(crawlResult);
+
+  // Build action queue from gap analysis
+  const actionQueueData = buildActionQueue(gapAnalysis.pages, request.gscSnapshot);
+
+  // Determine which pages to target
+  let selectedTargets: string[] | undefined;
+  let pagesToImprove = crawlResult.pages;
+
+  if (request.targetPaths && request.targetPaths.length > 0) {
+    // Use explicitly provided target paths
+    const normalizedTargets = new Set(request.targetPaths.map(p => normalizePath(p)));
+    pagesToImprove = crawlResult.pages.filter(page => {
+      const normalizedPath = normalizePath(page.url);
+      return normalizedTargets.has(normalizedPath);
+    });
+    selectedTargets = request.targetPaths;
+  } else if (request.gscSnapshot && request.gscSnapshot.length > 0) {
+    // Auto-select top N from action queue based on scoring
+    const autoSelectCount = Math.min(DEFAULT_AUTO_SELECT_TARGETS, maxPages);
+    selectedTargets = selectTopTargets(
+      { items: actionQueueData.items, totalPagesAnalyzed: actionQueueData.summary.totalPagesAnalyzed, pagesWithGscData: actionQueueData.summary.pagesWithGscData, averageScore: actionQueueData.summary.averageScore },
+      autoSelectCount
+    );
+
+    // Filter to only the auto-selected pages
+    const selectedPathSet = new Set(selectedTargets);
+    pagesToImprove = crawlResult.pages.filter(page => {
+      const normalizedPath = normalizePath(page.url);
+      return selectedPathSet.has(normalizedPath);
+    });
+  }
+
+  // Generate improvement plan for the selected pages
+  const filteredCrawlResult = {
+    ...crawlResult,
+    pages: pagesToImprove,
+    pagesAnalyzed: pagesToImprove.length,
+  };
+  const improvementPlan = planSiteImprovements(filteredCrawlResult);
 
   // Prepare base results
   const improvements: ImproveResults = {
     siteUrl: improvementPlan.siteUrl,
-    totalPages: improvementPlan.totalPages,
+    totalPages: crawlResult.pagesAnalyzed, // Total crawled pages
     pagesWithImprovements: improvementPlan.pagesWithImprovements,
     pages: improvementPlan.pages,
     siteWideSuggestions: improvementPlan.siteWideSuggestions,
     crawlErrors: crawlResult.errors,
+    selectedTargets,
+    actionQueue: actionQueueData.items,
   };
 
-  // Handle write-back if enabled
+  // Handle write-back / diff preview if configured
   let writeBackEnabled = false;
   let writeBackDryRun = true;
 
-  if (request.writeBack === true && request.targetRepo) {
+  // Check if we need to use the new path contract-based workflow
+  const usePathContract = request.targetRepo &&
+    request.targetRepo.projectType &&
+    request.targetRepo.routeStrategy;
+
+  if (usePathContract && request.targetRepo) {
+    // New path contract-based workflow
+    const pathContract: PathContractConfig = {
+      projectType: request.targetRepo.projectType,
+      routeStrategy: request.targetRepo.routeStrategy,
+    };
+
+    // Build GitHub client config (needed for fetching existing contents and writing)
+    let githubConfig: GitHubClientConfig | null = null;
+    if (githubToken) {
+      githubConfig = {
+        token: githubToken,
+        target: {
+          owner: request.targetRepo.owner,
+          repo: request.targetRepo.repo,
+          branch: request.targetRepo.branch,
+        },
+      };
+    }
+
+    // Map URLs to file paths to determine which files we need to fetch
+    const filePaths: string[] = [];
+    for (const page of improvementPlan.pages) {
+      try {
+        const mapping = mapUrlToFilePath(page.url, pathContract);
+        filePaths.push(mapping.filePath);
+      } catch {
+        // Mapping errors will be captured during planning
+      }
+    }
+
+    // Fetch existing contents if we have GitHub access
+    let existingContents = new Map<string, string | null>();
+    if (githubConfig) {
+      try {
+        existingContents = await fetchExistingContents(githubConfig, filePaths);
+      } catch {
+        // If we can't fetch, proceed with empty map (all files treated as new)
+      }
+    }
+
+    // Plan patches with path contract
+    const patchPlanConfig: PatchPlanConfig = {
+      pathContract,
+      patchOutputDir: request.writeBackConfig?.patchOutputDir ?? 'geo-patches',
+    };
+
+    const patchPlan = planPatches(improvementPlan.pages, existingContents, patchPlanConfig);
+
+    // Build write-back result
+    const writeBackResult: WriteBackResult = {
+      success: true,
+      dryRun: true,
+      patchesGenerated: patchPlan.plannedChanges.length,
+      patchesApplied: 0,
+      commits: [],
+      patches: patchPlan.plannedChanges.map(c => ({
+        path: c.filePath,
+        operation: c.action === 'no-op' ? 'update' : c.action,
+        humanReviewRequired: c.humanReviewRequired,
+        reviewNotes: c.reviewNotes,
+      })),
+      plannedChanges: patchPlan.plannedChanges.map(c => ({
+        url: c.url,
+        filePath: c.filePath,
+        action: c.action,
+        humanReviewRequired: c.humanReviewRequired,
+        reviewNotes: c.reviewNotes,
+      })),
+      diffPreviews: patchPlan.diffPreviews,
+      mappingErrors: patchPlan.mappingErrors,
+      errors: [],
+      warnings: patchPlan.warnings,
+    };
+
+    // If writeBack is true and we have GitHub access, apply the patches
+    if (request.writeBack === true && githubConfig) {
+      writeBackEnabled = true;
+
+      // Verify write access before proceeding
+      try {
+        await verifyWriteAccess(githubConfig);
+      } catch (err) {
+        if (err instanceof GitHubAPIError) {
+          throw new Error(`GitHub access verification failed: ${err.message}`);
+        }
+        throw err;
+      }
+
+      // Apply planned patches
+      const applyResult = await applyPlannedPatches(
+        githubConfig,
+        patchPlan.plannedChanges,
+        false // not dry run
+      );
+
+      writeBackDryRun = false;
+      writeBackResult.success = applyResult.success;
+      writeBackResult.dryRun = false;
+      writeBackResult.patchesApplied = applyResult.patchesApplied;
+      writeBackResult.commits = applyResult.commits;
+      writeBackResult.errors = applyResult.errors;
+      writeBackResult.warnings.push(...applyResult.warnings);
+    } else if (request.diffPreview === true) {
+      // Diff preview mode - just show diffs without GitHub token requirement
+      writeBackResult.warnings.push('Diff preview mode - no files were written.');
+    } else if (!githubToken && request.writeBack === true) {
+      // Write-back requested but no token
+      throw new Error(
+        `Write-back requires GitHub token in ${GITHUB_TOKEN_HEADER} header`
+      );
+    } else {
+      // Default dry run
+      writeBackResult.warnings.push('Dry run mode - no files were written. Set writeBack: true to apply changes.');
+    }
+
+    improvements.writeBack = writeBackResult;
+  } else if (request.writeBack === true && request.targetRepo) {
+    // Legacy workflow (backwards compatibility)
     writeBackEnabled = true;
 
     // Validate GitHub token
@@ -260,11 +622,14 @@ async function handleImproveMode(
         humanReviewRequired: p.humanReviewRequired,
         reviewNotes: p.reviewNotes,
       })),
+      plannedChanges: [],
+      diffPreviews: [],
+      mappingErrors: [],
       errors: patchResult.errors,
       warnings: patchResult.warnings,
     };
-  } else if (request.writeBack === false || !request.writeBack) {
-    // Dry run - just show what would be written
+  } else {
+    // Dry run - just show what would be written (legacy mode)
     const patchConfig: PatchApplierConfig = {
       pathMappings: request.writeBackConfig?.pathMappings?.map(m => ({
         urlPath: m.urlPath,
@@ -290,6 +655,9 @@ async function handleImproveMode(
         humanReviewRequired: p.humanReviewRequired,
         reviewNotes: p.reviewNotes,
       })),
+      plannedChanges: [],
+      diffPreviews: [],
+      mappingErrors: [],
       errors: [],
       warnings: ['Dry run mode - no files were written. Set writeBack: true to apply changes.'],
     };
@@ -362,6 +730,7 @@ async function handleGenerateMode(request: RunRequest): Promise<RunResponse> {
 /**
  * Handles "audit" mode execution.
  * Crawls site and performs GEO gap analysis.
+ * Optionally generates prioritized action queue using GSC data.
  */
 async function handleAuditMode(request: RunRequest): Promise<RunResponse> {
   if (!request.siteUrl) {
@@ -374,6 +743,9 @@ async function handleAuditMode(request: RunRequest): Promise<RunResponse> {
 
   // Run gap analysis
   const gapAnalysis = analyzeGeoGaps(crawlResult);
+
+  // Build action queue (always included, uses GSC data if provided)
+  const actionQueueData = buildActionQueue(gapAnalysis.pages, request.gscSnapshot);
 
   const summary: RunSummary = {
     mode: 'audit',
@@ -395,6 +767,8 @@ async function handleAuditMode(request: RunRequest): Promise<RunResponse> {
     siteWideIssues: gapAnalysis.siteWideIssues,
     pages: gapAnalysis.pages,
     crawlErrors: crawlResult.errors,
+    actionQueue: actionQueueData.items,
+    actionQueueSummary: actionQueueData.summary,
   };
 
   const results: RunResults = {
@@ -412,49 +786,94 @@ async function handleAuditMode(request: RunRequest): Promise<RunResponse> {
 /**
  * Main request handler for the Worker.
  */
-async function handleRequest(request: Request): Promise<Response> {
+async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
 
   // Handle CORS preflight
   if (request.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': `Content-Type, ${GITHUB_TOKEN_HEADER}`,
-      },
+      headers: CORS_HEADERS,
     });
   }
 
   // Only accept POST to /run
   if (request.method !== 'POST') {
-    return errorResponse('Method not allowed. Use POST.', null, 405);
+    return apiErrorResponse('VALIDATION_ERROR', 'Method not allowed. Use POST.', 405);
   }
 
   if (url.pathname !== '/run') {
-    return errorResponse('Not found. Use POST /run', null, 404);
+    return apiErrorResponse('VALIDATION_ERROR', 'Not found. Use POST /run', 404);
   }
+
+  // ============================================
+  // AUTHENTICATION
+  // ============================================
+  const authResult = await authenticateRequest(request, env.NICO_GEO_KEYS);
+  if (!authResult.valid) {
+    return apiErrorResponse(authResult.errorCode, authResult.message, 401);
+  }
+
+  const keyRecord = authResult.keyRecord;
+
+  // ============================================
+  // RATE LIMITING
+  // ============================================
+  const rateLimitResult = await checkRateLimit(
+    keyRecord.keyId,
+    keyRecord.plan,
+    env.RATE_LIMITER
+  );
+
+  if (!rateLimitResult.allowed) {
+    return apiErrorResponse(
+      rateLimitResult.errorCode,
+      rateLimitResult.message,
+      429,
+      {
+        retryAfterSeconds: rateLimitResult.retryAfterSeconds,
+        usage: toUsageInfo(rateLimitResult.usage),
+      }
+    );
+  }
+
+  const usage = rateLimitResult.usage;
 
   // Parse JSON body
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return errorResponse('Invalid JSON in request body', null, 400);
+    return apiErrorResponse('VALIDATION_ERROR', 'Invalid JSON in request body', 400);
   }
 
   // Validate request structure
   const validation = validateRequest(body);
   if (!validation.valid) {
-    return errorResponse(validation.error, null, 400);
+    return apiErrorResponse('VALIDATION_ERROR', validation.error, 400);
   }
 
   const runRequest = validation.request;
 
   // Enforce noHallucinations constraint
   if (!runRequest.constraints.noHallucinations) {
-    return errorResponse('constraints.noHallucinations must be true', runRequest.mode, 400);
+    return apiErrorResponse(
+      'VALIDATION_ERROR',
+      'constraints.noHallucinations must be true',
+      400
+    );
+  }
+
+  // ============================================
+  // PLAN GATING: Write-back requires pro plan
+  // ============================================
+  if (runRequest.writeBack === true && keyRecord.plan !== 'pro') {
+    return apiErrorResponse(
+      'PLAN_REQUIRED',
+      'Write-back feature requires a pro plan. Upgrade to enable write-back.',
+      403,
+      { currentPlan: keyRecord.plan, requiredPlan: 'pro' }
+    );
   }
 
   // Extract GitHub token for write-back operations
@@ -475,13 +894,23 @@ async function handleRequest(request: Request): Promise<Response> {
         response = await handleAuditMode(runRequest);
         break;
       default:
-        return errorResponse(`Unsupported mode: ${runRequest.mode}`, null, 400);
+        return apiErrorResponse(
+          'VALIDATION_ERROR',
+          `Unsupported mode: ${runRequest.mode}`,
+          400
+        );
     }
 
-    return jsonResponse(response, 200);
+    // Add usage info to successful response
+    const responseWithUsage: RunResponseWithUsage = {
+      ...response,
+      usage: toUsageInfo(usage),
+    };
+
+    return jsonResponse(responseWithUsage, 200);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error occurred';
-    return errorResponse(message, runRequest.mode, 500);
+    return apiErrorResponse('INTERNAL_ERROR', message, 500);
   }
 }
 
@@ -491,3 +920,8 @@ async function handleRequest(request: Request): Promise<Response> {
 export default {
   fetch: handleRequest,
 };
+
+/**
+ * Re-export Durable Object for Cloudflare binding.
+ */
+export { RateLimiterDO } from './doRateLimiter';

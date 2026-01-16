@@ -9,7 +9,11 @@ import type { SiteGapAnalysis, GapFlag } from '../core/analyze/geoGapAnalyzer';
 import type { SiteImprovementPlan, PageImprovementPlan } from '../core/analyze/improvementPlanner';
 import type { CrawlResult } from '../core/ingest/siteCrawler';
 import type { CommitResult } from '../core/writeback/githubClient';
-import type { FilePatch } from '../core/writeback/patchApplier';
+import type { FilePatch, PlannedFileChange, DiffPreview } from '../core/writeback/patchApplier';
+import type { ProjectType, RouteStrategy, PathContractConfig } from '../core/writeback/pathContract';
+import type { GscSnapshotRow } from '../core/intelligence/gscSnapshot.types';
+import type { ScoreBreakdown } from '../core/intelligence/opportunityScorer';
+import type { RecommendedAction } from '../core/intelligence/actionQueue';
 
 /**
  * Supported execution modes for the GEO Worker.
@@ -33,6 +37,10 @@ export interface TargetRepoConfig {
   owner: string;
   repo: string;
   branch: string;
+  /** Project type determines file structure (astro-pages or static-html) */
+  projectType: ProjectType;
+  /** Route strategy determines file naming (path-index or flat-html) */
+  routeStrategy: RouteStrategy;
 }
 
 /**
@@ -71,8 +79,14 @@ export interface RunRequest {
   businessInput?: BusinessInput;
   constraints: RunConstraints;
   writeBack?: boolean;
+  /** Request diff preview without applying changes */
+  diffPreview?: boolean;
   targetRepo?: TargetRepoConfig;
   writeBackConfig?: WriteBackConfig;
+  /** GSC snapshot data for ranking intelligence (audit/improve modes) */
+  gscSnapshot?: GscSnapshotRow[];
+  /** Target paths to process in improve mode (if not provided, auto-selects top N) */
+  targetPaths?: string[];
 }
 
 /**
@@ -88,6 +102,24 @@ export interface RunSummary {
   writeBackEnabled?: boolean;
   writeBackDryRun?: boolean;
   warnings?: string[];
+}
+
+/**
+ * Action queue item for prioritized improvements.
+ */
+export interface ActionQueueItem {
+  /** Full URL */
+  url: string;
+  /** Normalized path */
+  path: string;
+  /** Total opportunity score */
+  totalScore: number;
+  /** Breakdown of score components */
+  scoreBreakdown: ScoreBreakdown;
+  /** Primary recommended action */
+  recommendedNextAction: RecommendedAction;
+  /** Evidence strings explaining the ranking */
+  evidence: string[];
 }
 
 /**
@@ -111,6 +143,14 @@ export interface AuditResults {
     isLocationPage: boolean;
   }>;
   crawlErrors: string[];
+  /** Prioritized action queue (present when gscSnapshot provided or always for gap-based scoring) */
+  actionQueue?: ActionQueueItem[];
+  /** Summary statistics for the action queue */
+  actionQueueSummary?: {
+    totalPagesAnalyzed: number;
+    pagesWithGscData: number;
+    averageScore: number;
+  };
 }
 
 /**
@@ -133,6 +173,26 @@ export interface WriteBackResult {
     humanReviewRequired: boolean;
     reviewNotes: string[];
   }>;
+  /** Planned file changes with full details (for diff preview) */
+  plannedChanges: Array<{
+    url: string;
+    filePath: string;
+    action: 'create' | 'update' | 'no-op';
+    humanReviewRequired: boolean;
+    reviewNotes: string[];
+  }>;
+  /** Unified diff previews for each planned change */
+  diffPreviews: Array<{
+    filePath: string;
+    action: 'create' | 'update' | 'no-op';
+    diff: string;
+    truncated: boolean;
+  }>;
+  /** Path mapping errors (URLs that couldn't be mapped to files) */
+  mappingErrors: Array<{
+    url: string;
+    error: string;
+  }>;
   errors: string[];
   warnings: string[];
 }
@@ -148,6 +208,10 @@ export interface ImproveResults {
   siteWideSuggestions: string[];
   crawlErrors: string[];
   writeBack?: WriteBackResult;
+  /** Auto-selected target paths (when gscSnapshot provided and no targetPaths specified) */
+  selectedTargets?: string[];
+  /** Action queue for reference (same format as audit mode) */
+  actionQueue?: ActionQueueItem[];
 }
 
 /**
@@ -192,7 +256,7 @@ export interface RunResponse {
 }
 
 /**
- * Error response structure.
+ * Error response structure (legacy).
  */
 export interface ErrorResponse {
   status: 'error';
@@ -200,6 +264,49 @@ export interface ErrorResponse {
   summary: null;
   results: null;
   error: string;
+}
+
+/**
+ * Structured API error codes.
+ */
+export type ApiErrorCode =
+  | 'MISSING_AUTH'
+  | 'INVALID_FORMAT'
+  | 'INVALID_KEY'
+  | 'KEY_DISABLED'
+  | 'DAILY_LIMIT_EXCEEDED'
+  | 'MINUTE_LIMIT_EXCEEDED'
+  | 'PLAN_REQUIRED'
+  | 'VALIDATION_ERROR'
+  | 'INTERNAL_ERROR';
+
+/**
+ * Structured API error response.
+ */
+export interface ApiErrorResponse {
+  status: 'error';
+  errorCode: ApiErrorCode;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+/**
+ * Usage information included in responses.
+ */
+export interface UsageInfo {
+  keyId: string;
+  plan: 'free' | 'pro';
+  requestsToday: number;
+  dailyLimit: number;
+  minuteWindowCount: number;
+  minuteWindowLimit: number;
+}
+
+/**
+ * Extended run response with usage info.
+ */
+export interface RunResponseWithUsage extends RunResponse {
+  usage?: UsageInfo;
 }
 
 /**
@@ -236,6 +343,18 @@ export function isValidTargetRepo(targetRepo: unknown): targetRepo is TargetRepo
     typeof t.repo === 'string' &&
     t.repo.length > 0 &&
     typeof t.branch === 'string' &&
-    t.branch.length > 0
+    t.branch.length > 0 &&
+    (t.projectType === 'astro-pages' || t.projectType === 'static-html') &&
+    (t.routeStrategy === 'path-index' || t.routeStrategy === 'flat-html')
   );
 }
+
+/**
+ * Re-export path contract types for convenience.
+ */
+export type { ProjectType, RouteStrategy, PathContractConfig };
+
+/**
+ * Re-export intelligence types for convenience.
+ */
+export type { GscSnapshotRow, ScoreBreakdown, RecommendedAction };

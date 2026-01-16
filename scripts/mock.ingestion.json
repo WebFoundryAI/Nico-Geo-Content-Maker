@@ -1,0 +1,82 @@
+{
+  "siteUrl": "https://example-plumber.com",
+  "totalPages": 8,
+  "pagesAnalyzed": 8,
+  "pages": [
+    {
+      "url": "https://example-plumber.com/",
+      "path": "/",
+      "geoScore": 35,
+      "gaps": [
+        { "flag": "missing_answer_capsule", "severity": "high" },
+        { "flag": "missing_faq", "severity": "medium" },
+        { "flag": "weak_meta_description", "severity": "medium" }
+      ]
+    },
+    {
+      "url": "https://example-plumber.com/services",
+      "path": "/services",
+      "geoScore": 45,
+      "gaps": [
+        { "flag": "missing_schema", "severity": "high" },
+        { "flag": "missing_faq", "severity": "medium" }
+      ]
+    },
+    {
+      "url": "https://example-plumber.com/services/plumbing",
+      "path": "/services/plumbing",
+      "geoScore": 25,
+      "gaps": [
+        { "flag": "missing_answer_capsule", "severity": "high" },
+        { "flag": "missing_schema", "severity": "high" },
+        { "flag": "weak_title", "severity": "medium" },
+        { "flag": "thin_content", "severity": "high" }
+      ]
+    },
+    {
+      "url": "https://example-plumber.com/services/heating",
+      "path": "/services/heating",
+      "geoScore": 40,
+      "gaps": [
+        { "flag": "missing_faq", "severity": "medium" },
+        { "flag": "missing_schema", "severity": "medium" }
+      ]
+    },
+    {
+      "url": "https://example-plumber.com/services/emergency",
+      "path": "/services/emergency",
+      "geoScore": 20,
+      "gaps": [
+        { "flag": "missing_answer_capsule", "severity": "high" },
+        { "flag": "missing_faq", "severity": "high" },
+        { "flag": "missing_schema", "severity": "high" },
+        { "flag": "weak_meta_description", "severity": "medium" }
+      ]
+    },
+    {
+      "url": "https://example-plumber.com/about",
+      "path": "/about",
+      "geoScore": 60,
+      "gaps": [
+        { "flag": "missing_schema", "severity": "low" }
+      ]
+    },
+    {
+      "url": "https://example-plumber.com/contact",
+      "path": "/contact",
+      "geoScore": 70,
+      "gaps": [
+        { "flag": "missing_local_schema", "severity": "medium" }
+      ]
+    },
+    {
+      "url": "https://example-plumber.com/blog/winter-tips",
+      "path": "/blog/winter-tips",
+      "geoScore": 55,
+      "gaps": [
+        { "flag": "missing_faq", "severity": "low" },
+        { "flag": "weak_internal_links", "severity": "medium" }
+      ]
+    }
+  ]
+}

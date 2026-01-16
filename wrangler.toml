@@ -5,7 +5,48 @@ compatibility_date = "2024-01-01"
 [build]
 command = ""
 
-# No secrets or environment variables defined yet
-# Add them here when needed:
+# ============================================
+# KV NAMESPACE BINDINGS
+# ============================================
+# The NICO_GEO_KEYS namespace stores API keys and their metadata.
+# Each key is stored with prefix "api_key_" followed by the actual key.
+#
+# To create the KV namespace for production:
+#   wrangler kv:namespace create "NICO_GEO_KEYS"
+#
+# For local development (preview):
+#   wrangler kv:namespace create "NICO_GEO_KEYS" --preview
+#
+# After creation, replace the placeholder ID below with the actual ID.
+
+[[kv_namespaces]]
+binding = "NICO_GEO_KEYS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_PREVIEW_KV_NAMESPACE_ID"
+
+# ============================================
+# DURABLE OBJECT BINDINGS
+# ============================================
+# The RATE_LIMITER Durable Object manages per-key rate limiting state.
+# Each API key gets its own DO instance for isolated rate tracking.
+#
+# The DO class is exported from worker/doRateLimiter.ts
+
+[durable_objects]
+bindings = [
+  { name = "RATE_LIMITER", class_name = "RateLimiterDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["RateLimiterDO"]
+
+# ============================================
+# ENVIRONMENT VARIABLES (DO NOT STORE SECRETS HERE)
+# ============================================
+# Secrets should be set via wrangler secret commands:
+#   wrangler secret put SECRET_NAME
+#
+# No secrets are stored in this file.
 # [vars]
 # EXAMPLE_VAR = "value"
