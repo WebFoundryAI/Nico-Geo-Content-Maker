@@ -86,7 +86,8 @@ const WEIGHTS: Record<string, number> = {
   low: 2,
 };
 
-const GEO_TERMS = [
+// Specific city/location names (not generic words)
+const GEO_CITY_TERMS = [
   'london', 'manchester', 'birmingham', 'leeds', 'glasgow', 'liverpool', 'bristol',
   'sheffield', 'edinburgh', 'cardiff', 'belfast', 'newcastle', 'nottingham',
   'southampton', 'portsmouth', 'york', 'cambridge', 'oxford', 'brighton', 'bath',
@@ -94,21 +95,28 @@ const GEO_TERMS = [
   'san antonio', 'san diego', 'dallas', 'san jose', 'austin', 'jacksonville',
   'fort worth', 'columbus', 'charlotte', 'seattle', 'denver', 'boston', 'portland',
   'miami', 'atlanta', 'detroit', 'minneapolis', 'tampa', 'brooklyn', 'queens',
-  'local', 'near me', 'nearby', 'area', 'region', 'city', 'town', 'county',
-  'district', 'neighborhood', 'serving', 'service area', 'located in', 'based in',
-  'north', 'south', 'east', 'west', 'central', 'downtown', 'midtown', 'uptown',
 ];
 
-const SERVICE_TERMS = [
+// Local intent phrases (more specific than just "local")
+const GEO_INTENT_TERMS = [
+  'near me', 'nearby', 'service area', 'located in', 'based in', 'serving',
+  'in your area', 'locations', 'find us',
+];
+
+// Specific service industry terms (not generic business words)
+const SERVICE_INDUSTRY_TERMS = [
   'plumber', 'plumbing', 'electrician', 'electrical', 'hvac', 'heating', 'cooling',
   'roofing', 'roofer', 'contractor', 'construction', 'landscaping', 'landscaper',
   'cleaning', 'cleaner', 'painting', 'painter', 'carpentry', 'carpenter',
   'locksmith', 'pest control', 'moving', 'mover', 'handyman', 'remodeling',
-  'renovation', 'repair', 'installation', 'maintenance', 'emergency', '24/7',
-  'same day', 'free estimate', 'licensed', 'insured', 'certified', 'professional',
-  'expert', 'specialist', 'services', 'solutions', 'company', 'business',
-  'consultation', 'inspection', 'assessment', 'quote', 'pricing',
-  'residential', 'commercial', 'industrial', 'domestic',
+  'renovation', 'repair', 'installation', 'maintenance',
+];
+
+// Local service intent signals
+const SERVICE_INTENT_TERMS = [
+  'emergency', '24/7', 'same day', 'free estimate', 'free quote',
+  'licensed', 'insured', 'certified', 'bonded',
+  'residential', 'commercial', 'call now', 'book online',
 ];
 
 const SERVICE_PAGE_INDICATORS = [
@@ -372,27 +380,53 @@ function extractSignals(html: string, pageUrl: string): PageSignals {
     signals.wordCount = cleanBody.split(/\s+/).filter(w => w.length > 2).length;
   }
 
-  // Check for geo keywords in key areas
+  // Check for geo keywords in key areas (title, H1, meta, H2s)
   const keyContent = (signals.title + ' ' + signals.h1Text + ' ' + signals.metaDescription + ' ' + signals.h2s.join(' ')).toLowerCase();
   const bodyLower = signals.bodyText.toLowerCase();
 
-  for (const term of GEO_TERMS) {
+  // Check for specific city names
+  for (const term of GEO_CITY_TERMS) {
     if (keyContent.includes(term.toLowerCase()) || bodyLower.includes(term.toLowerCase())) {
       if (!signals.geoTermsFound.includes(term)) {
         signals.geoTermsFound.push(term);
       }
     }
   }
-  signals.hasGeoKeywords = signals.geoTermsFound.length > 0;
 
-  for (const term of SERVICE_TERMS) {
+  // Check for local intent phrases
+  for (const term of GEO_INTENT_TERMS) {
+    if (keyContent.includes(term.toLowerCase()) || bodyLower.includes(term.toLowerCase())) {
+      if (!signals.geoTermsFound.includes(term)) {
+        signals.geoTermsFound.push(term);
+      }
+    }
+  }
+
+  // hasGeoKeywords only true if city name found in KEY areas (not just body)
+  const hasGeoInKeyContent = GEO_CITY_TERMS.some(term => keyContent.includes(term.toLowerCase()));
+  signals.hasGeoKeywords = hasGeoInKeyContent;
+
+  // Check for service industry terms
+  for (const term of SERVICE_INDUSTRY_TERMS) {
     if (keyContent.includes(term.toLowerCase())) {
       if (!signals.serviceTermsFound.includes(term)) {
         signals.serviceTermsFound.push(term);
       }
     }
   }
-  signals.hasServiceKeywords = signals.serviceTermsFound.length > 0;
+
+  // Check for service intent terms
+  for (const term of SERVICE_INTENT_TERMS) {
+    if (keyContent.includes(term.toLowerCase()) || bodyLower.includes(term.toLowerCase())) {
+      if (!signals.serviceTermsFound.includes(term)) {
+        signals.serviceTermsFound.push(term);
+      }
+    }
+  }
+
+  // hasServiceKeywords only true if industry term found in KEY areas
+  const hasServiceInKeyContent = SERVICE_INDUSTRY_TERMS.some(term => keyContent.includes(term.toLowerCase()));
+  signals.hasServiceKeywords = hasServiceInKeyContent;
 
   // NAP Signals - Phone numbers
   const phoneRegex = /(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}|(?:\+44|0)[\s]?[0-9]{2,5}[\s]?[0-9]{3,4}[\s]?[0-9]{3,4}/g;
@@ -598,7 +632,7 @@ function runAuditRules(ctx: AuditContext): Issue[] {
 
   // No geographic targeting in title
   const titleLower = hp.title.toLowerCase();
-  const hasGeoInTitle = GEO_TERMS.some(term => titleLower.includes(term.toLowerCase()));
+  const hasGeoInTitle = GEO_CITY_TERMS.some(term => titleLower.includes(term.toLowerCase()));
   if (hp.title && !hasGeoInTitle) {
     issues.push({
       title: 'Title Missing City/Location Modifier',
@@ -923,8 +957,8 @@ function runAuditRules(ctx: AuditContext): Issue[] {
   // Check meta description contains service + location
   if (hp.metaDescription) {
     const metaLower = hp.metaDescription.toLowerCase();
-    const metaHasService = SERVICE_TERMS.some(t => metaLower.includes(t.toLowerCase()));
-    const metaHasGeo = GEO_TERMS.some(t => metaLower.includes(t.toLowerCase()));
+    const metaHasService = SERVICE_INDUSTRY_TERMS.some(t => metaLower.includes(t.toLowerCase()));
+    const metaHasGeo = GEO_CITY_TERMS.some(t => metaLower.includes(t.toLowerCase()));
 
     if (!metaHasService || !metaHasGeo) {
       issues.push({
@@ -933,6 +967,167 @@ function runAuditRules(ctx: AuditContext): Issue[] {
         evidence: `Meta description ${!metaHasService ? 'lacks service keywords' : ''}${!metaHasService && !metaHasGeo ? ' and ' : ''}${!metaHasGeo ? 'lacks location terms' : ''}`,
         impact: 'Meta descriptions should include your service and location for local SEO.',
         recommendation: 'Rewrite: "[Service] in [City]. [Unique value]. Call [phone]."',
+      });
+    }
+  }
+
+  // ============================================================
+  // UNIVERSAL RULES (fire for almost any site)
+  // ============================================================
+
+  // Check for Review/AggregateRating schema (most sites lack this)
+  const hasReviewSchema = hp.jsonLdTypes.some(t =>
+    t.toLowerCase().includes('review') || t.toLowerCase().includes('aggregaterating')
+  );
+  if (!hasReviewSchema) {
+    issues.push({
+      title: 'Missing Review Schema',
+      priority: 'medium',
+      evidence: `No Review or AggregateRating schema found. Current schemas: ${hp.jsonLdTypes.length > 0 ? hp.jsonLdTypes.join(', ') : 'none'}`,
+      impact: 'Review schema enables star ratings in search results, increasing click-through rates by up to 35%.',
+      recommendation: 'Add AggregateRating schema with your Google/Yelp review data.',
+    });
+  }
+
+  // Check title includes brand/business name
+  const titleWords = hp.title.split(/[\s|–\-:]+/).filter(w => w.length > 2);
+  if (hp.title && titleWords.length < 3) {
+    issues.push({
+      title: 'Title Too Simple',
+      priority: 'medium',
+      evidence: `Title "${hp.title}" has only ${titleWords.length} meaningful words`,
+      impact: 'Titles should include service, location, and brand for maximum SEO impact.',
+      recommendation: 'Use format: "[Primary Service] in [City] | [Brand Name]"',
+    });
+  }
+
+  // Check for complete meta tags (title + description)
+  if (hp.title && !hp.metaDescription) {
+    issues.push({
+      title: 'Incomplete Social Meta Tags',
+      priority: 'low',
+      evidence: 'Missing meta description which affects Open Graph sharing',
+      impact: 'Social sharing without proper meta tags looks unprofessional and reduces engagement.',
+      recommendation: 'Add meta description and Open Graph tags (og:title, og:description, og:image).',
+    });
+  }
+
+  // Check H2 content quality
+  if (hp.h2s.length > 0) {
+    const shortH2s = hp.h2s.filter(h => h.length < 20);
+    if (shortH2s.length > hp.h2s.length / 2) {
+      issues.push({
+        title: 'Weak Subheading Content',
+        priority: 'low',
+        evidence: `${shortH2s.length} of ${hp.h2s.length} H2s are very short: "${shortH2s.slice(0, 2).join('", "')}"`,
+        impact: 'Descriptive H2s help AI understand page sections and improve featured snippet chances.',
+        recommendation: 'Make H2s descriptive: "Why Choose Our [Service] in [City]" instead of just "Services".',
+      });
+    }
+  }
+
+  // Check content depth (even if not "thin")
+  if (hp.wordCount >= 300 && hp.wordCount < 800) {
+    issues.push({
+      title: 'Content Could Be More Comprehensive',
+      priority: 'low',
+      evidence: `Homepage has ${hp.wordCount} words. Competitive pages average 1000-1500 words.`,
+      impact: 'More comprehensive content tends to rank better and gets more AI citations.',
+      recommendation: 'Consider adding: detailed service explanations, process steps, FAQs, case studies.',
+    });
+  }
+
+  // Check for mobile-specific signals in anchor text
+  const clickHereAnchors = hp.anchorTexts.filter(a =>
+    a.toLowerCase().includes('click here') || a.toLowerCase().includes('read more') || a.toLowerCase() === 'here'
+  );
+  if (clickHereAnchors.length > 2) {
+    issues.push({
+      title: 'Poor Anchor Text Quality',
+      priority: 'medium',
+      evidence: `Found ${clickHereAnchors.length} generic anchors like "click here" or "read more"`,
+      impact: 'Descriptive anchor text helps search engines understand linked content.',
+      recommendation: 'Replace generic anchors with descriptive text: "our plumbing services" instead of "click here".',
+    });
+  }
+
+  // Check for structured content signals (lists, tables)
+  const hasStructuredContent = hp.bodyText.includes('•') || hp.bodyText.includes('✓') ||
+                               hp.bodyText.includes('1.') || hp.bodyText.includes('Step');
+  if (!hasStructuredContent && hp.wordCount > 400) {
+    issues.push({
+      title: 'Lacks Structured Content',
+      priority: 'low',
+      evidence: 'No bullet points, numbered lists, or step-by-step content detected',
+      impact: 'Structured content is easier to scan and more likely to be featured in AI responses.',
+      recommendation: 'Add bulleted service lists, numbered process steps, or comparison tables.',
+    });
+  }
+
+  // Universal: Check if title and H1 match (indicates good focus)
+  if (hp.title && hp.h1Text) {
+    const titleCore = hp.title.toLowerCase().split('|')[0].trim();
+    const h1Core = hp.h1Text.toLowerCase().trim();
+    const similarity = titleCore.includes(h1Core.slice(0, 20)) || h1Core.includes(titleCore.slice(0, 20));
+    if (!similarity && titleCore.length > 10 && h1Core.length > 10) {
+      issues.push({
+        title: 'Title and H1 Mismatch',
+        priority: 'low',
+        evidence: `Title: "${hp.title.slice(0, 50)}..." vs H1: "${hp.h1Text.slice(0, 50)}..."`,
+        impact: 'Mismatched title and H1 can confuse search engines about page focus.',
+        recommendation: 'Align your H1 with your title tag for consistent messaging.',
+      });
+    }
+  }
+
+  // Check for years/dates in content (freshness signal)
+  const currentYear = new Date().getFullYear();
+  const hasCurrentYear = hp.bodyText.includes(String(currentYear));
+  const hasLastYear = hp.bodyText.includes(String(currentYear - 1));
+  if (!hasCurrentYear && !hasLastYear && hp.wordCount > 300) {
+    issues.push({
+      title: 'No Freshness Signals',
+      priority: 'low',
+      evidence: `No mention of ${currentYear} or ${currentYear - 1} found in content`,
+      impact: 'Date references signal content freshness to search engines and AI.',
+      recommendation: `Add current year to content: "Serving [City] since 2010" or "Updated for ${currentYear}"`,
+    });
+  }
+
+  // Check for trust signals
+  const trustTerms = ['guarantee', 'warranty', 'satisfaction', 'money back', 'years experience', 'established'];
+  const hasTrustSignals = trustTerms.some(term => hp.bodyText.toLowerCase().includes(term));
+  if (!hasTrustSignals && hp.wordCount > 200) {
+    issues.push({
+      title: 'Missing Trust Signals',
+      priority: 'medium',
+      evidence: 'No guarantee, warranty, or experience claims found in content',
+      impact: 'Trust signals influence both user decisions and AI recommendations.',
+      recommendation: 'Add trust elements: years in business, satisfaction guarantee, certifications.',
+    });
+  }
+
+  // Ensure minimum issue count for meaningful audit
+  // If very few issues found, add general optimization suggestions
+  if (issues.length < 5) {
+    // Check if site seems well-optimized but missing GEO focus
+    if (!hp.hasGeoKeywords) {
+      issues.push({
+        title: 'Site Lacks Local SEO Focus',
+        priority: 'high',
+        evidence: 'No city or location names found in title, H1, or meta description',
+        impact: 'Without location signals, your site cannot compete for local search queries.',
+        recommendation: 'Add your primary service city to title, H1, and throughout content.',
+      });
+    }
+
+    if (!hp.hasLocalBusinessSchema && !hp.hasOrganizationSchema) {
+      issues.push({
+        title: 'No Business Identity Schema',
+        priority: 'high',
+        evidence: 'Site lacks structured data identifying it as a business entity',
+        impact: 'Search engines and AI cannot properly categorize your business without schema.',
+        recommendation: 'Implement LocalBusiness or Organization JSON-LD schema.',
       });
     }
   }
