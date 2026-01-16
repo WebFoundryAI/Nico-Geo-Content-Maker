@@ -69,6 +69,11 @@ import type {
 import { isValidMode, isValidConstraints, isValidTargetRepo } from './types';
 import { authenticateRequest, type KVNamespace, type ApiKeyRecord } from './auth';
 import { checkRateLimit, type DurableObjectNamespace, type UsageState, RATE_LIMITS } from './rateLimit';
+import { validateGscSnapshot, type GscSnapshotRow } from '../core/intelligence/gscSnapshot.types';
+import { matchGscToPages, normalizePath } from '../core/intelligence/gscSnapshot.normalise';
+import { scorePages, type PageScoringInput } from '../core/intelligence/opportunityScorer';
+import { generateActionQueue, selectTopTargets } from '../core/intelligence/actionQueue';
+import type { ActionQueueItem } from './types';
 
 /**
  * Environment bindings for the Worker.
@@ -98,6 +103,11 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': `Content-Type, ${AUTH_HEADER}, ${GITHUB_TOKEN_HEADER}`,
 };
+
+/**
+ * Default number of auto-selected targets when using GSC snapshot in improve mode.
+ */
+const DEFAULT_AUTO_SELECT_TARGETS = 5;
 
 /**
  * Creates a JSON response with proper headers.
@@ -229,6 +239,35 @@ function validateRequest(body: unknown): { valid: true; request: RunRequest } | 
     }
   }
 
+  // Validate gscSnapshot if provided (only for audit/improve modes)
+  let validatedGscRows: GscSnapshotRow[] | undefined;
+  if (obj.gscSnapshot !== undefined) {
+    if (mode === 'generate') {
+      return { valid: false, error: 'gscSnapshot is not supported for "generate" mode' };
+    }
+    const gscValidation = validateGscSnapshot(obj.gscSnapshot);
+    if (!gscValidation.valid && gscValidation.errors.length > 0) {
+      const errorSummary = gscValidation.errors.slice(0, 3).map(e => `row ${e.rowIndex}: ${e.message}`).join('; ');
+      return { valid: false, error: `Invalid gscSnapshot: ${errorSummary}` };
+    }
+    validatedGscRows = gscValidation.validRows;
+  }
+
+  // Validate targetPaths if provided (only for improve mode)
+  if (obj.targetPaths !== undefined) {
+    if (mode !== 'improve') {
+      return { valid: false, error: 'targetPaths is only supported for "improve" mode' };
+    }
+    if (!Array.isArray(obj.targetPaths)) {
+      return { valid: false, error: 'targetPaths must be an array of path strings' };
+    }
+    for (const p of obj.targetPaths) {
+      if (typeof p !== 'string' || p.length === 0) {
+        return { valid: false, error: 'targetPaths must contain non-empty strings' };
+      }
+    }
+  }
+
   return {
     valid: true,
     request: {
@@ -240,6 +279,8 @@ function validateRequest(body: unknown): { valid: true; request: RunRequest } | 
       diffPreview: obj.diffPreview as boolean | undefined,
       targetRepo: obj.targetRepo as TargetRepoConfig | undefined,
       writeBackConfig: obj.writeBackConfig as WriteBackConfig | undefined,
+      gscSnapshot: validatedGscRows,
+      targetPaths: obj.targetPaths as string[] | undefined,
     },
   };
 }
@@ -278,6 +319,52 @@ async function fetchExistingContents(
 }
 
 /**
+ * Builds an action queue from gap analysis pages and optional GSC data.
+ */
+function buildActionQueue(
+  pages: Array<{
+    url: string;
+    geoScore: number;
+    gaps: Array<{ flag: string; severity?: string }>;
+  }>,
+  gscSnapshot?: GscSnapshotRow[]
+): { items: ActionQueueItem[]; summary: { totalPagesAnalyzed: number; pagesWithGscData: number; averageScore: number } } {
+  // Get URLs from pages
+  const urls = pages.map(p => p.url);
+
+  // Match GSC data if provided
+  const gscMatches = gscSnapshot ? matchGscToPages(urls, gscSnapshot) : [];
+  const gscMatchMap = new Map(gscMatches.map(m => [m.path, m]));
+
+  // Build scoring inputs
+  const scoringInputs: PageScoringInput[] = pages.map(page => {
+    const normalizedPath = normalizePath(page.url);
+    const gscMatch = gscMatchMap.get(normalizedPath);
+
+    return {
+      url: page.url,
+      path: normalizedPath,
+      geoScore: page.geoScore,
+      gapFlags: page.gaps.map(g => g.flag),
+      gscMetrics: gscMatch?.gscMetrics || null,
+    };
+  });
+
+  // Score and generate action queue
+  const scoredPages = scorePages(scoringInputs);
+  const actionQueueResult = generateActionQueue(scoredPages);
+
+  return {
+    items: actionQueueResult.items,
+    summary: {
+      totalPagesAnalyzed: actionQueueResult.totalPagesAnalyzed,
+      pagesWithGscData: actionQueueResult.pagesWithGscData,
+      averageScore: actionQueueResult.averageScore,
+    },
+  };
+}
+
+/**
  * Handles "improve" mode execution.
  * Crawls site, generates patch-ready improvement blocks, and optionally writes back to GitHub.
  * Supports diff preview and idempotent block updates via path contract.
@@ -294,17 +381,58 @@ async function handleImproveMode(
   const maxPages = request.constraints.maxPages ?? DEFAULT_CRAWLER_CONFIG.maxPages;
   const crawlResult = await crawlSite(request.siteUrl, { maxPages });
 
-  // Generate improvement plan
-  const improvementPlan = planSiteImprovements(crawlResult);
+  // Run gap analysis first (needed for action queue)
+  const gapAnalysis = analyzeGeoGaps(crawlResult);
+
+  // Build action queue from gap analysis
+  const actionQueueData = buildActionQueue(gapAnalysis.pages, request.gscSnapshot);
+
+  // Determine which pages to target
+  let selectedTargets: string[] | undefined;
+  let pagesToImprove = crawlResult.pages;
+
+  if (request.targetPaths && request.targetPaths.length > 0) {
+    // Use explicitly provided target paths
+    const normalizedTargets = new Set(request.targetPaths.map(p => normalizePath(p)));
+    pagesToImprove = crawlResult.pages.filter(page => {
+      const normalizedPath = normalizePath(page.url);
+      return normalizedTargets.has(normalizedPath);
+    });
+    selectedTargets = request.targetPaths;
+  } else if (request.gscSnapshot && request.gscSnapshot.length > 0) {
+    // Auto-select top N from action queue based on scoring
+    const autoSelectCount = Math.min(DEFAULT_AUTO_SELECT_TARGETS, maxPages);
+    selectedTargets = selectTopTargets(
+      { items: actionQueueData.items, totalPagesAnalyzed: actionQueueData.summary.totalPagesAnalyzed, pagesWithGscData: actionQueueData.summary.pagesWithGscData, averageScore: actionQueueData.summary.averageScore },
+      autoSelectCount
+    );
+
+    // Filter to only the auto-selected pages
+    const selectedPathSet = new Set(selectedTargets);
+    pagesToImprove = crawlResult.pages.filter(page => {
+      const normalizedPath = normalizePath(page.url);
+      return selectedPathSet.has(normalizedPath);
+    });
+  }
+
+  // Generate improvement plan for the selected pages
+  const filteredCrawlResult = {
+    ...crawlResult,
+    pages: pagesToImprove,
+    pagesAnalyzed: pagesToImprove.length,
+  };
+  const improvementPlan = planSiteImprovements(filteredCrawlResult);
 
   // Prepare base results
   const improvements: ImproveResults = {
     siteUrl: improvementPlan.siteUrl,
-    totalPages: improvementPlan.totalPages,
+    totalPages: crawlResult.pagesAnalyzed, // Total crawled pages
     pagesWithImprovements: improvementPlan.pagesWithImprovements,
     pages: improvementPlan.pages,
     siteWideSuggestions: improvementPlan.siteWideSuggestions,
     crawlErrors: crawlResult.errors,
+    selectedTargets,
+    actionQueue: actionQueueData.items,
   };
 
   // Handle write-back / diff preview if configured
@@ -602,6 +730,7 @@ async function handleGenerateMode(request: RunRequest): Promise<RunResponse> {
 /**
  * Handles "audit" mode execution.
  * Crawls site and performs GEO gap analysis.
+ * Optionally generates prioritized action queue using GSC data.
  */
 async function handleAuditMode(request: RunRequest): Promise<RunResponse> {
   if (!request.siteUrl) {
@@ -614,6 +743,9 @@ async function handleAuditMode(request: RunRequest): Promise<RunResponse> {
 
   // Run gap analysis
   const gapAnalysis = analyzeGeoGaps(crawlResult);
+
+  // Build action queue (always included, uses GSC data if provided)
+  const actionQueueData = buildActionQueue(gapAnalysis.pages, request.gscSnapshot);
 
   const summary: RunSummary = {
     mode: 'audit',
@@ -635,6 +767,8 @@ async function handleAuditMode(request: RunRequest): Promise<RunResponse> {
     siteWideIssues: gapAnalysis.siteWideIssues,
     pages: gapAnalysis.pages,
     crawlErrors: crawlResult.errors,
+    actionQueue: actionQueueData.items,
+    actionQueueSummary: actionQueueData.summary,
   };
 
   const results: RunResults = {

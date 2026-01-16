@@ -11,6 +11,9 @@ import type { CrawlResult } from '../core/ingest/siteCrawler';
 import type { CommitResult } from '../core/writeback/githubClient';
 import type { FilePatch, PlannedFileChange, DiffPreview } from '../core/writeback/patchApplier';
 import type { ProjectType, RouteStrategy, PathContractConfig } from '../core/writeback/pathContract';
+import type { GscSnapshotRow } from '../core/intelligence/gscSnapshot.types';
+import type { ScoreBreakdown } from '../core/intelligence/opportunityScorer';
+import type { RecommendedAction } from '../core/intelligence/actionQueue';
 
 /**
  * Supported execution modes for the GEO Worker.
@@ -80,6 +83,10 @@ export interface RunRequest {
   diffPreview?: boolean;
   targetRepo?: TargetRepoConfig;
   writeBackConfig?: WriteBackConfig;
+  /** GSC snapshot data for ranking intelligence (audit/improve modes) */
+  gscSnapshot?: GscSnapshotRow[];
+  /** Target paths to process in improve mode (if not provided, auto-selects top N) */
+  targetPaths?: string[];
 }
 
 /**
@@ -95,6 +102,24 @@ export interface RunSummary {
   writeBackEnabled?: boolean;
   writeBackDryRun?: boolean;
   warnings?: string[];
+}
+
+/**
+ * Action queue item for prioritized improvements.
+ */
+export interface ActionQueueItem {
+  /** Full URL */
+  url: string;
+  /** Normalized path */
+  path: string;
+  /** Total opportunity score */
+  totalScore: number;
+  /** Breakdown of score components */
+  scoreBreakdown: ScoreBreakdown;
+  /** Primary recommended action */
+  recommendedNextAction: RecommendedAction;
+  /** Evidence strings explaining the ranking */
+  evidence: string[];
 }
 
 /**
@@ -118,6 +143,14 @@ export interface AuditResults {
     isLocationPage: boolean;
   }>;
   crawlErrors: string[];
+  /** Prioritized action queue (present when gscSnapshot provided or always for gap-based scoring) */
+  actionQueue?: ActionQueueItem[];
+  /** Summary statistics for the action queue */
+  actionQueueSummary?: {
+    totalPagesAnalyzed: number;
+    pagesWithGscData: number;
+    averageScore: number;
+  };
 }
 
 /**
@@ -175,6 +208,10 @@ export interface ImproveResults {
   siteWideSuggestions: string[];
   crawlErrors: string[];
   writeBack?: WriteBackResult;
+  /** Auto-selected target paths (when gscSnapshot provided and no targetPaths specified) */
+  selectedTargets?: string[];
+  /** Action queue for reference (same format as audit mode) */
+  actionQueue?: ActionQueueItem[];
 }
 
 /**
@@ -316,3 +353,8 @@ export function isValidTargetRepo(targetRepo: unknown): targetRepo is TargetRepo
  * Re-export path contract types for convenience.
  */
 export type { ProjectType, RouteStrategy, PathContractConfig };
+
+/**
+ * Re-export intelligence types for convenience.
+ */
+export type { GscSnapshotRow, ScoreBreakdown, RecommendedAction };
