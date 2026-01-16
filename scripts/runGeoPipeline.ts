@@ -8,8 +8,9 @@
  *
  * This script:
  * - Loads BusinessInput from /inputs/example.business.json
- * - Validates required fields
+ * - Validates input using strict runtime validator
  * - Executes the GEO pipeline
+ * - Validates output against contract
  * - Runs all output adapters (JSON, Markdown, HTML)
  * - Writes three output files to /outputs
  */
@@ -18,7 +19,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import type { BusinessInput } from '../inputs/business.schema';
-import { runGEOPipeline, validatePipelineInput } from '../core/pipeline/geoPipeline';
+import { runGEOPipeline } from '../core/pipeline/geoPipeline';
+import { validateBusinessInput } from '../core/rules/businessInput.validator';
+import { validateGEOOutput } from '../contracts/output.contract';
 
 // Import adapters
 import { toJSONString } from '../adapters/json.adapter';
@@ -56,29 +59,20 @@ function main(): void {
     process.exit(1);
   }
 
-  // Step 2: Validate required structure
+  // Step 2: Validate input using strict runtime validator
   console.log('Validating input structure...');
 
-  const validationErrors = validateRequiredFields(rawInput);
-  if (validationErrors.length > 0) {
+  const validationResult = validateBusinessInput(rawInput);
+  if (!validationResult.valid) {
     console.error('ERROR: Input validation failed:');
-    validationErrors.forEach(err => console.error(`  - ${err}`));
+    validationResult.errors.forEach(err => console.error(`  - ${err}`));
     process.exit(1);
   }
 
   const input = rawInput as BusinessInput;
-
-  // Step 3: Run pipeline validation
-  const pipelineErrors = validatePipelineInput(input);
-  if (pipelineErrors.length > 0) {
-    console.error('ERROR: Pipeline validation failed:');
-    pipelineErrors.forEach(err => console.error(`  - ${err}`));
-    process.exit(1);
-  }
-
   console.log('Input validation passed.\n');
 
-  // Step 4: Execute pipeline
+  // Step 3: Execute pipeline
   console.log('Executing GEO pipeline...');
 
   let output;
@@ -90,6 +84,18 @@ function main(): void {
   }
 
   console.log('Pipeline execution complete.\n');
+
+  // Step 4: Validate output against contract
+  console.log('Validating output against contract...');
+
+  const outputErrors = validateGEOOutput(output);
+  if (outputErrors.length > 0) {
+    console.error('ERROR: Output validation failed:');
+    outputErrors.forEach(err => console.error(`  - ${err}`));
+    process.exit(1);
+  }
+
+  console.log('Output validation passed.\n');
 
   // Ensure output directory exists
   if (!fs.existsSync(OUTPUT_DIR)) {
@@ -134,69 +140,6 @@ function main(): void {
   console.log(`  - ${OUTPUT_JSON}`);
   console.log(`  - ${OUTPUT_MD}`);
   console.log(`  - ${OUTPUT_HTML}`);
-}
-
-/**
- * Validates that required fields exist in the input object.
- * Returns array of error messages (empty if valid).
- */
-function validateRequiredFields(input: unknown): string[] {
-  const errors: string[] = [];
-
-  if (!input || typeof input !== 'object') {
-    errors.push('Input must be a valid object');
-    return errors;
-  }
-
-  const obj = input as Record<string, unknown>;
-
-  // Check business.name
-  if (!obj.business || typeof obj.business !== 'object') {
-    errors.push('Missing required field: business');
-  } else {
-    const business = obj.business as Record<string, unknown>;
-    if (!business.name || typeof business.name !== 'string') {
-      errors.push('Missing required field: business.name');
-    }
-  }
-
-  // Check location
-  if (!obj.location || typeof obj.location !== 'object') {
-    errors.push('Missing required field: location');
-  } else {
-    const location = obj.location as Record<string, unknown>;
-    if (!location.primaryCity || typeof location.primaryCity !== 'string') {
-      errors.push('Missing required field: location.primaryCity');
-    }
-    if (!location.country || typeof location.country !== 'string') {
-      errors.push('Missing required field: location.country');
-    }
-    if (!Array.isArray(location.serviceAreas) || location.serviceAreas.length === 0) {
-      errors.push('Missing required field: location.serviceAreas (must be non-empty array)');
-    }
-  }
-
-  // Check services
-  if (!obj.services || typeof obj.services !== 'object') {
-    errors.push('Missing required field: services');
-  } else {
-    const services = obj.services as Record<string, unknown>;
-    if (!Array.isArray(services.primary) || services.primary.length === 0) {
-      errors.push('Missing required field: services.primary (must be non-empty array)');
-    }
-  }
-
-  // Check constraints
-  if (!obj.constraints || typeof obj.constraints !== 'object') {
-    errors.push('Missing required field: constraints');
-  } else {
-    const constraints = obj.constraints as Record<string, unknown>;
-    if (constraints.noHallucinations !== true) {
-      errors.push('Required field constraints.noHallucinations must be true');
-    }
-  }
-
-  return errors;
 }
 
 // Execute
