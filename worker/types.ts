@@ -219,7 +219,7 @@ export interface RunResponse {
 }
 
 /**
- * Error response structure.
+ * Error response structure (legacy).
  */
 export interface ErrorResponse {
   status: 'error';
@@ -227,6 +227,49 @@ export interface ErrorResponse {
   summary: null;
   results: null;
   error: string;
+}
+
+/**
+ * Structured API error codes.
+ */
+export type ApiErrorCode =
+  | 'MISSING_AUTH'
+  | 'INVALID_FORMAT'
+  | 'INVALID_KEY'
+  | 'KEY_DISABLED'
+  | 'DAILY_LIMIT_EXCEEDED'
+  | 'MINUTE_LIMIT_EXCEEDED'
+  | 'PLAN_REQUIRED'
+  | 'VALIDATION_ERROR'
+  | 'INTERNAL_ERROR';
+
+/**
+ * Structured API error response.
+ */
+export interface ApiErrorResponse {
+  status: 'error';
+  errorCode: ApiErrorCode;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+/**
+ * Usage information included in responses.
+ */
+export interface UsageInfo {
+  keyId: string;
+  plan: 'free' | 'pro';
+  requestsToday: number;
+  dailyLimit: number;
+  minuteWindowCount: number;
+  minuteWindowLimit: number;
+}
+
+/**
+ * Extended run response with usage info.
+ */
+export interface RunResponseWithUsage extends RunResponse {
+  usage?: UsageInfo;
 }
 
 /**

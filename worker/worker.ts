@@ -11,10 +11,18 @@
  *   - "audit": Analyze existing site for GEO gaps
  *   - "improve": Generate patch-ready improvement blocks (with optional write-back)
  *
+ * AUTHENTICATION:
+ * - All requests require: Authorization: Bearer <api_key>
+ * - Keys are validated against NICO_GEO_KEYS KV namespace
+ *
+ * RATE LIMITS (per key):
+ * - free: 20 requests/day, 2/minute burst
+ * - pro: 500 requests/day, 30/minute burst
+ *
  * CONSTRAINTS:
  * - Never writes files locally
  * - Never infers or fabricates data
- * - Write-back is opt-in and requires explicit configuration
+ * - Write-back is opt-in, requires pro plan and explicit configuration
  * - No secrets stored in code
  */
 
@@ -53,8 +61,24 @@ import type {
   WriteBackResult,
   TargetRepoConfig,
   WriteBackConfig,
+  ApiErrorResponse,
+  ApiErrorCode,
+  UsageInfo,
+  RunResponseWithUsage,
 } from './types';
 import { isValidMode, isValidConstraints, isValidTargetRepo } from './types';
+import { authenticateRequest, type KVNamespace, type ApiKeyRecord } from './auth';
+import { checkRateLimit, type DurableObjectNamespace, type UsageState, RATE_LIMITS } from './rateLimit';
+
+/**
+ * Environment bindings for the Worker.
+ */
+export interface Env {
+  /** KV namespace for API keys */
+  NICO_GEO_KEYS: KVNamespace;
+  /** Durable Object namespace for rate limiting */
+  RATE_LIMITER: DurableObjectNamespace;
+}
 
 /**
  * Header name for GitHub token.
@@ -62,22 +86,37 @@ import { isValidMode, isValidConstraints, isValidTargetRepo } from './types';
 const GITHUB_TOKEN_HEADER = 'X-GitHub-Token';
 
 /**
+ * Header name for Authorization.
+ */
+const AUTH_HEADER = 'Authorization';
+
+/**
+ * CORS headers for all responses.
+ */
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': `Content-Type, ${AUTH_HEADER}, ${GITHUB_TOKEN_HEADER}`,
+};
+
+/**
  * Creates a JSON response with proper headers.
  */
-function jsonResponse(data: RunResponse | ErrorResponse, status: number = 200): Response {
+function jsonResponse(
+  data: RunResponse | RunResponseWithUsage | ErrorResponse | ApiErrorResponse,
+  status: number = 200
+): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
       'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': `Content-Type, ${GITHUB_TOKEN_HEADER}`,
+      ...CORS_HEADERS,
     },
   });
 }
 
 /**
- * Creates an error response.
+ * Creates an error response (legacy format).
  */
 function errorResponse(message: string, mode: RunMode | null = null, status: number = 400): Response {
   const body: ErrorResponse = {
@@ -88,6 +127,38 @@ function errorResponse(message: string, mode: RunMode | null = null, status: num
     error: message,
   };
   return jsonResponse(body, status);
+}
+
+/**
+ * Creates a structured API error response.
+ */
+function apiErrorResponse(
+  errorCode: ApiErrorCode,
+  message: string,
+  status: number,
+  details?: Record<string, unknown>
+): Response {
+  const body: ApiErrorResponse = {
+    status: 'error',
+    errorCode,
+    message,
+    ...(details && { details }),
+  };
+  return jsonResponse(body, status);
+}
+
+/**
+ * Converts UsageState to UsageInfo for response.
+ */
+function toUsageInfo(usage: UsageState): UsageInfo {
+  return {
+    keyId: usage.keyId,
+    plan: usage.plan,
+    requestsToday: usage.requestsToday,
+    dailyLimit: usage.dailyLimit,
+    minuteWindowCount: usage.minuteWindowCount,
+    minuteWindowLimit: usage.minuteWindowLimit,
+  };
 }
 
 /**
@@ -581,49 +652,94 @@ async function handleAuditMode(request: RunRequest): Promise<RunResponse> {
 /**
  * Main request handler for the Worker.
  */
-async function handleRequest(request: Request): Promise<Response> {
+async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
 
   // Handle CORS preflight
   if (request.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': `Content-Type, ${GITHUB_TOKEN_HEADER}`,
-      },
+      headers: CORS_HEADERS,
     });
   }
 
   // Only accept POST to /run
   if (request.method !== 'POST') {
-    return errorResponse('Method not allowed. Use POST.', null, 405);
+    return apiErrorResponse('VALIDATION_ERROR', 'Method not allowed. Use POST.', 405);
   }
 
   if (url.pathname !== '/run') {
-    return errorResponse('Not found. Use POST /run', null, 404);
+    return apiErrorResponse('VALIDATION_ERROR', 'Not found. Use POST /run', 404);
   }
+
+  // ============================================
+  // AUTHENTICATION
+  // ============================================
+  const authResult = await authenticateRequest(request, env.NICO_GEO_KEYS);
+  if (!authResult.valid) {
+    return apiErrorResponse(authResult.errorCode, authResult.message, 401);
+  }
+
+  const keyRecord = authResult.keyRecord;
+
+  // ============================================
+  // RATE LIMITING
+  // ============================================
+  const rateLimitResult = await checkRateLimit(
+    keyRecord.keyId,
+    keyRecord.plan,
+    env.RATE_LIMITER
+  );
+
+  if (!rateLimitResult.allowed) {
+    return apiErrorResponse(
+      rateLimitResult.errorCode,
+      rateLimitResult.message,
+      429,
+      {
+        retryAfterSeconds: rateLimitResult.retryAfterSeconds,
+        usage: toUsageInfo(rateLimitResult.usage),
+      }
+    );
+  }
+
+  const usage = rateLimitResult.usage;
 
   // Parse JSON body
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return errorResponse('Invalid JSON in request body', null, 400);
+    return apiErrorResponse('VALIDATION_ERROR', 'Invalid JSON in request body', 400);
   }
 
   // Validate request structure
   const validation = validateRequest(body);
   if (!validation.valid) {
-    return errorResponse(validation.error, null, 400);
+    return apiErrorResponse('VALIDATION_ERROR', validation.error, 400);
   }
 
   const runRequest = validation.request;
 
   // Enforce noHallucinations constraint
   if (!runRequest.constraints.noHallucinations) {
-    return errorResponse('constraints.noHallucinations must be true', runRequest.mode, 400);
+    return apiErrorResponse(
+      'VALIDATION_ERROR',
+      'constraints.noHallucinations must be true',
+      400
+    );
+  }
+
+  // ============================================
+  // PLAN GATING: Write-back requires pro plan
+  // ============================================
+  if (runRequest.writeBack === true && keyRecord.plan !== 'pro') {
+    return apiErrorResponse(
+      'PLAN_REQUIRED',
+      'Write-back feature requires a pro plan. Upgrade to enable write-back.',
+      403,
+      { currentPlan: keyRecord.plan, requiredPlan: 'pro' }
+    );
   }
 
   // Extract GitHub token for write-back operations
@@ -644,13 +760,23 @@ async function handleRequest(request: Request): Promise<Response> {
         response = await handleAuditMode(runRequest);
         break;
       default:
-        return errorResponse(`Unsupported mode: ${runRequest.mode}`, null, 400);
+        return apiErrorResponse(
+          'VALIDATION_ERROR',
+          `Unsupported mode: ${runRequest.mode}`,
+          400
+        );
     }
 
-    return jsonResponse(response, 200);
+    // Add usage info to successful response
+    const responseWithUsage: RunResponseWithUsage = {
+      ...response,
+      usage: toUsageInfo(usage),
+    };
+
+    return jsonResponse(responseWithUsage, 200);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error occurred';
-    return errorResponse(message, runRequest.mode, 500);
+    return apiErrorResponse('INTERNAL_ERROR', message, 500);
   }
 }
 
@@ -660,3 +786,8 @@ async function handleRequest(request: Request): Promise<Response> {
 export default {
   fetch: handleRequest,
 };
+
+/**
+ * Re-export Durable Object for Cloudflare binding.
+ */
+export { RateLimiterDO } from './doRateLimiter';
