@@ -113,16 +113,8 @@ async function main() {
     const input = [{
       url: 'https://example.com/',
       path: '/',
-      geoGaps: {
-        missingTitle: true,
-        missingMetaDescription: false,
-        missingSchema: true,
-        missingFaq: true,
-        missingAnswerCapsule: true,
-        shortContent: false,
-        noH1: false,
-        duplicateContent: false,
-      },
+      geoScore: 40, // Low GEO score = higher opportunity
+      gapFlags: ['missingTitle', 'missingSchema', 'missingFaq', 'missingAnswerCapsule'],
       gscMetrics: {
         clicks: 100,
         impressions: 5000,

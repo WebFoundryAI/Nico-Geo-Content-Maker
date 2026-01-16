@@ -8,6 +8,7 @@
     "test:smoke": "ts-node scripts/ciSmoke.ts"
   },
   "devDependencies": {
+    "@types/node": "^25.0.9",
     "ts-node": "^10.9.2",
     "typescript": "^5.3.3"
   }

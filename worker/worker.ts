@@ -1538,12 +1538,615 @@ async function handleReviewRoutes(
 }
 
 /**
+ * HTML page for the GEO Audit UI - Visual Report.
+ */
+const AUDIT_UI_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GEO Audit - SEO Analysis</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: #fff; min-height: 100vh; }
+    .container { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
+    .header { text-align: center; margin-bottom: 40px; }
+    .header h1 { font-size: 2.5rem; margin-bottom: 8px; background: linear-gradient(90deg, #4f46e5, #7c3aed); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .header p { color: #94a3b8; }
+    .input-section { display: flex; gap: 12px; justify-content: center; margin-bottom: 40px; }
+    .input-section input { width: 400px; padding: 16px 20px; font-size: 16px; border: 2px solid #334155; border-radius: 12px; background: #1e293b; color: #fff; outline: none; }
+    .input-section input:focus { border-color: #4f46e5; }
+    .input-section button { padding: 16px 32px; font-size: 16px; font-weight: 600; background: linear-gradient(90deg, #4f46e5, #7c3aed); color: white; border: none; border-radius: 12px; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; }
+    .input-section button:hover { transform: translateY(-2px); box-shadow: 0 10px 40px rgba(79, 70, 229, 0.3); }
+    .input-section button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .status { text-align: center; padding: 20px; color: #94a3b8; display: none; }
+    .status.visible { display: block; }
+    .status.error { color: #f87171; background: rgba(248, 113, 113, 0.1); border-radius: 12px; }
+    .results { display: none; }
+    .results.visible { display: block; }
+    .score-section { display: flex; justify-content: center; align-items: center; gap: 60px; margin-bottom: 40px; padding: 40px; background: rgba(30, 41, 59, 0.5); border-radius: 24px; border: 1px solid #334155; }
+    .score-dial { position: relative; width: 200px; height: 200px; }
+    .score-dial svg { transform: rotate(-90deg); }
+    .score-dial .bg { fill: none; stroke: #334155; stroke-width: 12; }
+    .score-dial .progress { fill: none; stroke-width: 12; stroke-linecap: round; transition: stroke-dashoffset 1s ease-out; }
+    .score-dial .score-text { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; }
+    .score-dial .score-value { font-size: 3.5rem; font-weight: 700; }
+    .score-dial .score-label { font-size: 0.875rem; color: #94a3b8; }
+    .score-info { text-align: left; }
+    .readiness-badge { display: inline-block; padding: 8px 20px; border-radius: 30px; font-weight: 600; font-size: 1.1rem; margin-bottom: 16px; }
+    .readiness-strong { background: linear-gradient(90deg, #059669, #10b981); }
+    .readiness-needs-work { background: linear-gradient(90deg, #d97706, #f59e0b); }
+    .readiness-not-ready { background: linear-gradient(90deg, #dc2626, #ef4444); }
+    .site-url { color: #94a3b8; font-size: 0.875rem; word-break: break-all; margin-bottom: 8px; }
+    .audit-time { color: #64748b; font-size: 0.75rem; }
+    .top-issues { margin-bottom: 40px; }
+    .section-title { font-size: 1.5rem; margin-bottom: 20px; display: flex; align-items: center; gap: 12px; }
+    .section-title .icon { width: 32px; height: 32px; background: linear-gradient(90deg, #ef4444, #f87171); border-radius: 8px; display: flex; align-items: center; justify-content: center; }
+    .issue-card { background: rgba(30, 41, 59, 0.5); border: 1px solid #334155; border-radius: 16px; padding: 24px; margin-bottom: 16px; border-left: 4px solid; }
+    .issue-critical { border-left-color: #ef4444; }
+    .issue-high { border-left-color: #f59e0b; }
+    .issue-medium { border-left-color: #3b82f6; }
+    .issue-low { border-left-color: #64748b; }
+    .issue-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+    .issue-title { font-size: 1.1rem; font-weight: 600; }
+    .severity-badge { padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; }
+    .severity-critical { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .severity-high { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+    .severity-medium { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+    .severity-low { background: rgba(100, 116, 139, 0.2); color: #94a3b8; }
+    .issue-reason { color: #94a3b8; margin-bottom: 12px; font-size: 0.9rem; }
+    .issue-fix { background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 8px; padding: 12px 16px; font-size: 0.875rem; }
+    .issue-fix strong { color: #10b981; }
+    .expandable-section { margin-bottom: 20px; }
+    .expand-header { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; background: rgba(30, 41, 59, 0.5); border: 1px solid #334155; border-radius: 12px; cursor: pointer; transition: background 0.2s; }
+    .expand-header:hover { background: rgba(51, 65, 85, 0.5); }
+    .expand-header h3 { font-size: 1rem; display: flex; align-items: center; gap: 8px; }
+    .expand-header .count { background: #334155; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; }
+    .expand-icon { transition: transform 0.3s; }
+    .expand-icon.open { transform: rotate(180deg); }
+    .expand-content { display: none; padding: 16px 0; }
+    .expand-content.visible { display: block; }
+    .pass-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: rgba(16, 185, 129, 0.1); border-radius: 8px; margin-bottom: 8px; color: #10b981; }
+    .footer { text-align: center; padding: 40px 0; color: #64748b; font-size: 0.875rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>GEO Audit</h1>
+      <p>Comprehensive SEO analysis for AI search visibility</p>
+    </div>
+
+    <div class="input-section">
+      <input type="url" id="siteUrl" placeholder="https://example.com" />
+      <button id="runAudit" onclick="runAudit()">Analyze Site</button>
+    </div>
+
+    <div class="status" id="status"></div>
+
+    <div class="results" id="results">
+      <div class="score-section">
+        <div class="score-dial">
+          <svg width="200" height="200" viewBox="0 0 200 200">
+            <circle class="bg" cx="100" cy="100" r="88" />
+            <circle class="progress" id="scoreCircle" cx="100" cy="100" r="88" stroke-dasharray="553" stroke-dashoffset="553" />
+          </svg>
+          <div class="score-text">
+            <div class="score-value" id="scoreValue">0</div>
+            <div class="score-label">GEO Score</div>
+          </div>
+        </div>
+        <div class="score-info">
+          <div class="readiness-badge" id="readinessBadge">Analyzing...</div>
+          <div class="site-url" id="siteUrlDisplay"></div>
+          <div class="audit-time" id="auditTime"></div>
+        </div>
+      </div>
+
+      <div class="top-issues">
+        <div class="section-title">
+          <div class="icon"><svg width="16" height="16" fill="white" viewBox="0 0 20 20"><path d="M10 2L2 18h16L10 2zm0 4l5.5 10h-11L10 6z"/></svg></div>
+          Top Priority Issues
+        </div>
+        <div id="topIssuesList"></div>
+      </div>
+
+      <div class="expandable-section">
+        <div class="expand-header" onclick="toggleSection('technical')">
+          <h3><span>🔧</span> Technical Issues <span class="count" id="technicalCount">0</span></h3>
+          <svg class="expand-icon" id="technicalIcon" width="20" height="20" fill="#94a3b8" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>
+        </div>
+        <div class="expand-content" id="technicalContent"></div>
+      </div>
+
+      <div class="expandable-section">
+        <div class="expand-header" onclick="toggleSection('content')">
+          <h3><span>📝</span> Content Issues <span class="count" id="contentCount">0</span></h3>
+          <svg class="expand-icon" id="contentIcon" width="20" height="20" fill="#94a3b8" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>
+        </div>
+        <div class="expand-content" id="contentContent"></div>
+      </div>
+
+      <div class="expandable-section">
+        <div class="expand-header" onclick="toggleSection('trust')">
+          <h3><span>⭐</span> Trust & Conversion <span class="count" id="trustCount">0</span></h3>
+          <svg class="expand-icon" id="trustIcon" width="20" height="20" fill="#94a3b8" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>
+        </div>
+        <div class="expand-content" id="trustContent"></div>
+      </div>
+
+      <div class="footer">
+        <p>GEO Audit powered by Nico-GEO Engine</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function toggleSection(name) {
+      const content = document.getElementById(name + 'Content');
+      const icon = document.getElementById(name + 'Icon');
+      content.classList.toggle('visible');
+      icon.classList.toggle('open');
+    }
+
+    function getScoreColor(score) {
+      if (score >= 70) return '#10b981';
+      if (score >= 40) return '#f59e0b';
+      return '#ef4444';
+    }
+
+    function renderIssue(issue, showFix = true) {
+      const severityClass = 'issue-' + issue.severity.toLowerCase();
+      const badgeClass = 'severity-' + issue.severity.toLowerCase();
+      return \`
+        <div class="issue-card \${severityClass}">
+          <div class="issue-header">
+            <div class="issue-title">\${issue.title}</div>
+            <span class="severity-badge \${badgeClass}">\${issue.severity}</span>
+          </div>
+          <div class="issue-reason">\${issue.reason}</div>
+          \${showFix ? \`<div class="issue-fix"><strong>Fix:</strong> \${issue.fix}</div>\` : ''}
+        </div>
+      \`;
+    }
+
+    function renderPass(text) {
+      return \`<div class="pass-item">✓ \${text}</div>\`;
+    }
+
+    async function runAudit() {
+      const urlInput = document.getElementById('siteUrl');
+      const btn = document.getElementById('runAudit');
+      const status = document.getElementById('status');
+      const results = document.getElementById('results');
+      const siteUrl = urlInput.value.trim();
+
+      if (!siteUrl) { alert('Please enter a URL'); return; }
+
+      btn.disabled = true;
+      status.className = 'status visible';
+      status.innerHTML = '<div style="font-size:1.5rem;margin-bottom:8px;">🔍</div>Analyzing site... This may take a moment.';
+      results.className = 'results';
+
+      try {
+        const res = await fetch('/ui/audit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ siteUrl })
+        });
+        const data = await res.json();
+
+        if (data.status === 'error') throw new Error(data.message || 'Audit failed');
+
+        // Update score dial
+        const score = data.score || 0;
+        const circle = document.getElementById('scoreCircle');
+        const circumference = 553;
+        const offset = circumference - (score / 100) * circumference;
+        circle.style.stroke = getScoreColor(score);
+        circle.style.strokeDashoffset = offset;
+        document.getElementById('scoreValue').textContent = score;
+        document.getElementById('scoreValue').style.color = getScoreColor(score);
+
+        // Update readiness badge
+        const badge = document.getElementById('readinessBadge');
+        badge.textContent = data.readiness;
+        badge.className = 'readiness-badge readiness-' + data.readiness.toLowerCase().replace(' ', '-');
+
+        // Update site info
+        document.getElementById('siteUrlDisplay').textContent = siteUrl;
+        document.getElementById('auditTime').textContent = 'Audited: ' + new Date().toLocaleString();
+
+        // Render top issues
+        const topList = document.getElementById('topIssuesList');
+        topList.innerHTML = (data.topIssues || []).map(i => renderIssue(i)).join('');
+
+        // Render sections
+        const sections = data.sections || {};
+        ['technical', 'content', 'trust'].forEach(name => {
+          const items = sections[name] || [];
+          const issues = items.filter(i => i.severity !== 'pass');
+          const passes = items.filter(i => i.severity === 'pass');
+          document.getElementById(name + 'Count').textContent = issues.length;
+          document.getElementById(name + 'Content').innerHTML =
+            issues.map(i => renderIssue(i, false)).join('') +
+            passes.map(i => renderPass(i.title)).join('');
+        });
+
+        status.className = 'status';
+        results.className = 'results visible';
+
+      } catch (err) {
+        status.className = 'status visible error';
+        status.textContent = 'Error: ' + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById('siteUrl').addEventListener('keypress', (e) => { if (e.key === 'Enter') runAudit(); });
+  </script>
+</body>
+</html>`;
+
+/**
+ * Issue severity weights for scoring.
+ */
+const SEVERITY_WEIGHTS: Record<string, number> = {
+  critical: 20,
+  high: 12,
+  medium: 6,
+  low: 3,
+};
+
+/**
+ * Audit issue structure.
+ */
+interface AuditIssue {
+  title: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'pass';
+  reason: string;
+  fix: string;
+  weight: number;
+  category: 'technical' | 'content' | 'trust';
+}
+
+/**
+ * Extracted page data from HTMLRewriter.
+ */
+interface PageData {
+  title: string;
+  h1: string;
+  metaDescription: string;
+  metaRobots: string;
+  wordCount: number;
+  hasLocalBusinessSchema: boolean;
+  hasServiceSchema: boolean;
+  hasFAQSchema: boolean;
+  hasReviewSchema: boolean;
+  internalLinks: number;
+  hasPhone: boolean;
+  hasAddress: boolean;
+  hasFAQSection: boolean;
+  serviceKeywords: string[];
+  bodyText: string;
+}
+
+/**
+ * HTMLRewriter handler to extract page data.
+ */
+class PageDataExtractor {
+  data: PageData = {
+    title: '',
+    h1: '',
+    metaDescription: '',
+    metaRobots: '',
+    wordCount: 0,
+    hasLocalBusinessSchema: false,
+    hasServiceSchema: false,
+    hasFAQSchema: false,
+    hasReviewSchema: false,
+    internalLinks: 0,
+    hasPhone: false,
+    hasAddress: false,
+    hasFAQSection: false,
+    serviceKeywords: [],
+    bodyText: '',
+  };
+
+  private currentElement: string = '';
+  private collectingText: boolean = false;
+
+  titleHandler = {
+    element: () => { this.currentElement = 'title'; this.collectingText = true; },
+    text: (text: { text: string }) => { if (this.currentElement === 'title') this.data.title += text.text; },
+  };
+
+  h1Handler = {
+    element: () => { this.currentElement = 'h1'; this.collectingText = true; },
+    text: (text: { text: string }) => { if (this.currentElement === 'h1' && !this.data.h1) this.data.h1 += text.text; },
+  };
+
+  metaHandler = {
+    element: (el: { getAttribute: (n: string) => string | null }) => {
+      const name = el.getAttribute('name')?.toLowerCase();
+      const content = el.getAttribute('content') || '';
+      if (name === 'description') this.data.metaDescription = content;
+      if (name === 'robots') this.data.metaRobots = content;
+    },
+  };
+
+  linkHandler = {
+    element: (el: { getAttribute: (n: string) => string | null }) => {
+      const href = el.getAttribute('href') || '';
+      if (href.startsWith('/') || href.startsWith('./')) this.data.internalLinks++;
+    },
+  };
+
+  scriptHandler = {
+    element: (el: { getAttribute: (n: string) => string | null }) => {
+      this.currentElement = 'script';
+      const type = el.getAttribute('type') || '';
+      if (type === 'application/ld+json') this.collectingText = true;
+    },
+    text: (text: { text: string }) => {
+      if (this.currentElement === 'script' && this.collectingText) {
+        const t = text.text.toLowerCase();
+        if (t.includes('localbusiness') || t.includes('plumber') || t.includes('plumbingservice')) this.data.hasLocalBusinessSchema = true;
+        if (t.includes('service') || t.includes('homeandconstructionbusiness')) this.data.hasServiceSchema = true;
+        if (t.includes('faqpage')) this.data.hasFAQSchema = true;
+        if (t.includes('review') || t.includes('aggregaterating')) this.data.hasReviewSchema = true;
+      }
+    },
+  };
+
+  bodyHandler = {
+    text: (text: { text: string }) => {
+      this.data.bodyText += text.text + ' ';
+    },
+  };
+}
+
+/**
+ * Analyzes extracted page data and generates issues.
+ */
+function analyzePageData(data: PageData, siteUrl: string): { issues: AuditIssue[]; score: number } {
+  const issues: AuditIssue[] = [];
+  let score = 100;
+
+  // Clean body text and count words
+  const cleanText = data.bodyText.replace(/\\s+/g, ' ').trim();
+  data.wordCount = cleanText.split(/\\s+/).filter(w => w.length > 2).length;
+
+  // Check for phone numbers
+  const phoneRegex = /(?:\\+?\\d{1,3}[-.\\s]?)?(?:\\(?\\d{2,4}\\)?[-.\\s]?)?\\d{3,4}[-.\\s]?\\d{3,4}/g;
+  data.hasPhone = phoneRegex.test(cleanText);
+
+  // Check for address patterns
+  const addressRegex = /\\d+\\s+[a-zA-Z]+\\s+(street|st|road|rd|avenue|ave|lane|ln|drive|dr|way|court|ct)/i;
+  data.hasAddress = addressRegex.test(cleanText);
+
+  // Check for FAQ patterns
+  data.hasFAQSection = /frequently\\s+asked|faq|common\\s+questions/i.test(cleanText);
+
+  // Check for service keywords
+  const serviceTerms = ['plumb', 'drain', 'pipe', 'leak', 'boiler', 'heating', 'emergency', 'repair', 'install', 'service'];
+  data.serviceKeywords = serviceTerms.filter(term => cleanText.toLowerCase().includes(term));
+
+  // TECHNICAL CHECKS
+  if (!data.title) {
+    issues.push({ title: 'Missing Page Title', severity: 'critical', reason: 'No <title> tag found. Search engines and AI need this to understand your page.', fix: 'Add a descriptive title tag like "Emergency Plumber in [City] | 24/7 Service | [Company]"', weight: SEVERITY_WEIGHTS.critical, category: 'technical' });
+    score -= SEVERITY_WEIGHTS.critical;
+  } else if (data.title.length < 30) {
+    issues.push({ title: 'Title Too Short', severity: 'medium', reason: 'Title is only ' + data.title.length + ' characters. Optimal is 50-60 characters.', fix: 'Expand title to include location, service, and unique value proposition.', weight: SEVERITY_WEIGHTS.medium, category: 'technical' });
+    score -= SEVERITY_WEIGHTS.medium;
+  } else {
+    issues.push({ title: 'Title Tag Present', severity: 'pass', reason: '', fix: '', weight: 0, category: 'technical' });
+  }
+
+  if (!data.h1) {
+    issues.push({ title: 'Missing H1 Heading', severity: 'critical', reason: 'No <h1> tag found. This is the most important heading for SEO.', fix: 'Add a clear H1 that describes your main service and location.', weight: SEVERITY_WEIGHTS.critical, category: 'technical' });
+    score -= SEVERITY_WEIGHTS.critical;
+  } else {
+    issues.push({ title: 'H1 Heading Present', severity: 'pass', reason: '', fix: '', weight: 0, category: 'technical' });
+  }
+
+  if (data.metaRobots.includes('noindex')) {
+    issues.push({ title: 'Page Blocked from Indexing', severity: 'critical', reason: 'Meta robots contains "noindex". Search engines cannot index this page.', fix: 'Remove noindex from meta robots unless this is intentional.', weight: SEVERITY_WEIGHTS.critical, category: 'technical' });
+    score -= SEVERITY_WEIGHTS.critical;
+  }
+
+  if (!data.hasLocalBusinessSchema && !data.hasServiceSchema) {
+    issues.push({ title: 'Missing Business Schema', severity: 'high', reason: 'No LocalBusiness or Service schema found. This helps AI understand your business.', fix: 'Add JSON-LD schema with LocalBusiness type including name, address, phone, and services.', weight: SEVERITY_WEIGHTS.high, category: 'technical' });
+    score -= SEVERITY_WEIGHTS.high;
+  } else {
+    issues.push({ title: 'Business Schema Present', severity: 'pass', reason: '', fix: '', weight: 0, category: 'technical' });
+  }
+
+  // CONTENT CHECKS
+  if (data.wordCount < 300) {
+    issues.push({ title: 'Thin Content', severity: 'critical', reason: 'Only ' + data.wordCount + ' words found. AI engines need substantial content to cite.', fix: 'Add at least 800 words of helpful content about your services, process, and expertise.', weight: SEVERITY_WEIGHTS.critical, category: 'content' });
+    score -= SEVERITY_WEIGHTS.critical;
+  } else if (data.wordCount < 600) {
+    issues.push({ title: 'Limited Content Depth', severity: 'medium', reason: data.wordCount + ' words is below optimal. More comprehensive content ranks better.', fix: 'Expand content to cover common questions, service details, and local information.', weight: SEVERITY_WEIGHTS.medium, category: 'content' });
+    score -= SEVERITY_WEIGHTS.medium;
+  } else {
+    issues.push({ title: 'Good Content Length', severity: 'pass', reason: '', fix: '', weight: 0, category: 'content' });
+  }
+
+  if (data.serviceKeywords.length < 3) {
+    issues.push({ title: 'Missing Service Keywords', severity: 'high', reason: 'Found only ' + data.serviceKeywords.length + ' service-related terms. AI needs clear service signals.', fix: 'Naturally incorporate service terms: plumbing, drain cleaning, leak repair, emergency service, etc.', weight: SEVERITY_WEIGHTS.high, category: 'content' });
+    score -= SEVERITY_WEIGHTS.high;
+  } else {
+    issues.push({ title: 'Service Keywords Present', severity: 'pass', reason: '', fix: '', weight: 0, category: 'content' });
+  }
+
+  if (data.internalLinks < 3) {
+    issues.push({ title: 'Weak Internal Linking', severity: 'medium', reason: 'Only ' + data.internalLinks + ' internal links. This limits page authority flow.', fix: 'Add links to your service pages, areas served, and contact page.', weight: SEVERITY_WEIGHTS.medium, category: 'content' });
+    score -= SEVERITY_WEIGHTS.medium;
+  }
+
+  if (!data.hasFAQSection && !data.hasFAQSchema) {
+    issues.push({ title: 'No FAQ Content', severity: 'medium', reason: 'No FAQ section found. FAQs directly answer queries AI engines look for.', fix: 'Add 5-10 common questions and answers about your services.', weight: SEVERITY_WEIGHTS.medium, category: 'content' });
+    score -= SEVERITY_WEIGHTS.medium;
+  } else {
+    issues.push({ title: 'FAQ Content Present', severity: 'pass', reason: '', fix: '', weight: 0, category: 'content' });
+  }
+
+  // TRUST CHECKS
+  if (!data.hasPhone) {
+    issues.push({ title: 'No Phone Number Visible', severity: 'high', reason: 'No phone number detected. This is critical for local service businesses.', fix: 'Display your phone number prominently in the header and throughout the page.', weight: SEVERITY_WEIGHTS.high, category: 'trust' });
+    score -= SEVERITY_WEIGHTS.high;
+  } else {
+    issues.push({ title: 'Phone Number Visible', severity: 'pass', reason: '', fix: '', weight: 0, category: 'trust' });
+  }
+
+  if (!data.hasAddress) {
+    issues.push({ title: 'No Address/Location Found', severity: 'medium', reason: 'No physical address detected. Location signals help local SEO.', fix: 'Add your business address or service areas clearly on the page.', weight: SEVERITY_WEIGHTS.medium, category: 'trust' });
+    score -= SEVERITY_WEIGHTS.medium;
+  } else {
+    issues.push({ title: 'Address Present', severity: 'pass', reason: '', fix: '', weight: 0, category: 'trust' });
+  }
+
+  if (!data.hasReviewSchema) {
+    issues.push({ title: 'No Review Schema', severity: 'medium', reason: 'No review or rating schema found. Social proof helps AI recommendations.', fix: 'Add AggregateRating schema or link to review platforms.', weight: SEVERITY_WEIGHTS.medium, category: 'trust' });
+    score -= SEVERITY_WEIGHTS.medium;
+  } else {
+    issues.push({ title: 'Review Schema Present', severity: 'pass', reason: '', fix: '', weight: 0, category: 'trust' });
+  }
+
+  return { issues, score: Math.max(0, Math.min(100, score)) };
+}
+
+/**
+ * Handles the UI audit endpoint (no auth required).
+ * Uses fetch + HTMLRewriter to analyze the target URL.
+ */
+async function handleUIAudit(request: Request): Promise<Response> {
+  try {
+    const body = await request.json() as { siteUrl?: string };
+    let siteUrl = body?.siteUrl;
+
+    if (!siteUrl || typeof siteUrl !== 'string') {
+      return new Response(JSON.stringify({ status: 'error', message: 'siteUrl is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      });
+    }
+
+    // Ensure URL has protocol
+    if (!siteUrl.startsWith('http://') && !siteUrl.startsWith('https://')) {
+      siteUrl = 'https://' + siteUrl;
+    }
+
+    try {
+      new URL(siteUrl);
+    } catch {
+      return new Response(JSON.stringify({ status: 'error', message: 'Invalid URL format' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      });
+    }
+
+    // Fetch the target page
+    let pageResponse: Response;
+    try {
+      pageResponse = await fetch(siteUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; GEOAuditBot/1.0)' },
+        redirect: 'follow',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Network error';
+      return new Response(JSON.stringify({ status: 'error', message: 'Could not fetch URL: ' + msg }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      });
+    }
+
+    if (!pageResponse.ok) {
+      return new Response(JSON.stringify({
+        status: 'error',
+        message: 'Site returned HTTP ' + pageResponse.status,
+      }), { status: 400, headers: { 'Content-Type': 'application/json', ...CORS_HEADERS } });
+    }
+
+    // Extract page data using HTMLRewriter
+    const extractor = new PageDataExtractor();
+    const rewriter = new HTMLRewriter()
+      .on('title', extractor.titleHandler)
+      .on('h1', extractor.h1Handler)
+      .on('meta', extractor.metaHandler)
+      .on('a', extractor.linkHandler)
+      .on('script[type="application/ld+json"]', extractor.scriptHandler)
+      .on('body', extractor.bodyHandler);
+
+    // Process the response through HTMLRewriter
+    const processed = rewriter.transform(pageResponse);
+    await processed.text(); // Consume to trigger handlers
+
+    // Analyze the extracted data
+    const { issues, score } = analyzePageData(extractor.data, siteUrl);
+
+    // Determine readiness
+    let readiness: 'Not Ready' | 'Needs Work' | 'Strong';
+    if (score >= 70) readiness = 'Strong';
+    else if (score >= 40) readiness = 'Needs Work';
+    else readiness = 'Not Ready';
+
+    // Sort issues by weight and get top 3
+    const sortedIssues = issues
+      .filter(i => i.severity !== 'pass')
+      .sort((a, b) => b.weight - a.weight);
+    const topIssues = sortedIssues.slice(0, 3);
+
+    // Group issues by category
+    const sections = {
+      technical: issues.filter(i => i.category === 'technical'),
+      content: issues.filter(i => i.category === 'content'),
+      trust: issues.filter(i => i.category === 'trust'),
+    };
+
+    const result = {
+      status: 'success',
+      score,
+      readiness,
+      topIssues,
+      sections,
+      siteUrl,
+      auditedAt: new Date().toISOString(),
+    };
+
+    return new Response(JSON.stringify(result, null, 2), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Audit failed';
+    return new Response(JSON.stringify({ status: 'error', message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+    });
+  }
+}
+
+/**
  * Main request handler for the Worker.
  */
 async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
 
-  // Get or create request ID early
+  // ============================================
+  // ROUTE: GET / (Audit UI) - MUST BE FIRST
+  // This check MUST come before any other routing
+  // ============================================
+  if (request.method === 'GET' && url.pathname === '/') {
+    return new Response(AUDIT_UI_HTML, {
+      status: 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
+
+  // Get or create request ID for API routes
   const requestId = getOrCreateRequestId(request);
   const logger = createLogger(request, requestId);
 
@@ -1555,6 +2158,13 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
       status: 204,
       headers,
     });
+  }
+
+  // ============================================
+  // ROUTE: POST /ui/audit (UI audit endpoint, no auth)
+  // ============================================
+  if (url.pathname === '/ui/audit' && request.method === 'POST') {
+    return handleUIAudit(request);
   }
 
   // ============================================
