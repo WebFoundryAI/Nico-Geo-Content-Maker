@@ -1,0 +1,11 @@
+name = "nico-geo-worker"
+main = "worker/worker.ts"
+compatibility_date = "2024-01-01"
+
+[build]
+command = ""
+
+# No secrets or environment variables defined yet
+# Add them here when needed:
+# [vars]
+# EXAMPLE_VAR = "value"
