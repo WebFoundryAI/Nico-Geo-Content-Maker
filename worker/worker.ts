@@ -1812,7 +1812,18 @@ async function handleUIAudit(request: Request): Promise<Response> {
 async function handleRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
 
-  // Get or create request ID early
+  // ============================================
+  // ROUTE: GET / (Audit UI) - MUST BE FIRST
+  // This check MUST come before any other routing
+  // ============================================
+  if (request.method === 'GET' && url.pathname === '/') {
+    return new Response(AUDIT_UI_HTML, {
+      status: 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  }
+
+  // Get or create request ID for API routes
   const requestId = getOrCreateRequestId(request);
   const logger = createLogger(request, requestId);
 
@@ -1823,16 +1834,6 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     return new Response(null, {
       status: 204,
       headers,
-    });
-  }
-
-  // ============================================
-  // ROUTE: GET / (Audit UI) - MUST BE FIRST
-  // ============================================
-  if (url.pathname === '/' && request.method === 'GET') {
-    return new Response(AUDIT_UI_HTML, {
-      status: 200,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
   }
 
