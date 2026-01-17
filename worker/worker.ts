@@ -2701,21 +2701,33 @@ async function handleUIGenerate(request: Request): Promise<Response> {
       });
     }
 
-    // Build the RunRequest structure
+    // Build the RunRequest structure with proper nested BusinessInput format
     const runRequest: RunRequest = {
       mode: 'generate',
       businessInput: {
-        businessName,
-        city,
-        state,
-        services,
-        phone: body.businessInput.phone,
-        uniqueSellingPoints: body.businessInput.uniqueSellingPoints,
+        business: {
+          name: businessName,
+        },
+        location: {
+          primaryCity: city,
+          region: state,
+          country: 'UK',
+          serviceAreas: [city],
+        },
+        contact: {
+          phone: body.businessInput.phone || undefined,
+        },
+        services: {
+          primary: services,
+        },
         constraints: {
           noHallucinations: true,
         },
       },
-      generators: body.generators,
+      generators: body.generators ? {
+        enabled: body.generators.include,
+        disabled: body.generators.exclude,
+      } : undefined,
       constraints: {
         noHallucinations: true,
       },
