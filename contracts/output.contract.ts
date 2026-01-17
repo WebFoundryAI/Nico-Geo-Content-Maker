@@ -134,6 +134,136 @@ export interface SchemaContract {
   sources: string[];
 }
 
+// ============================================================
+// NEW GENERATOR OUTPUT CONTRACTS (5 Generic Content Generators)
+// ============================================================
+
+/**
+ * Individual differentiator item for "Why Choose Us" section.
+ */
+export interface WhyChooseUsDifferentiator {
+  claim: string;
+  proof: string;
+  localContext: string;
+  category: 'expertise' | 'experience' | 'local' | 'speed' | 'quality';
+}
+
+/**
+ * Why Choose Us / Differentiators output.
+ */
+export interface WhyChooseUsContract {
+  summary: string;
+  differentiators: WhyChooseUsDifferentiator[];
+  callToAction: string;
+  sources: string[];
+}
+
+/**
+ * Individual team member bio.
+ */
+export interface TeamMemberBioContract {
+  name: string;
+  role: string;
+  bio: string;
+  credentials: string[];
+  specialties: string[];
+  yearsExperience: number;
+  trustSignals: string[];
+  sources: string[];
+}
+
+/**
+ * Team Bio output.
+ */
+export interface TeamBioContract {
+  team: TeamMemberBioContract[];
+  teamSummary: string;
+  sources: string[];
+}
+
+/**
+ * Individual process step for "How We Work" section.
+ */
+export interface ProcessStepContract {
+  stepNumber: number;
+  title: string;
+  description: string;
+  timeline: string;
+  expectations: string[];
+}
+
+/**
+ * How We Work / Service Process output.
+ */
+export interface HowWeWorkContract {
+  intro: string;
+  steps: ProcessStepContract[];
+  totalTimeline: string;
+  emergencyOption?: {
+    available: boolean;
+    timeline: string;
+    description: string;
+  };
+  sources: string[];
+}
+
+/**
+ * Individual case study result.
+ */
+export interface CaseStudyResultContract {
+  metric: string;
+  value: string;
+}
+
+/**
+ * Individual case study.
+ */
+export interface CaseStudyItemContract {
+  title: string;
+  challenge: string;
+  solution: string;
+  results: CaseStudyResultContract[];
+  projectType: string;
+  location: string;
+  clientAttribution?: string;
+  sources: string[];
+}
+
+/**
+ * Case Study output.
+ */
+export interface CaseStudyContract {
+  caseStudies: CaseStudyItemContract[];
+  summary: string;
+  sources: string[];
+}
+
+/**
+ * Individual enhanced testimonial.
+ */
+export interface EnhancedTestimonialContract {
+  original: string;
+  enhanced: string;
+  attribution: {
+    customerName: string;
+    serviceReceived: string;
+    date?: string;
+    outcome?: string;
+  };
+  keyQuote: string;
+  trustSignals: string[];
+  sources: string[];
+}
+
+/**
+ * Testimonial Enhancement output.
+ */
+export interface TestimonialContract {
+  testimonials: EnhancedTestimonialContract[];
+  summary: string;
+  sources: string[];
+}
+
 /**
  * Complete GEO pipeline output contract.
  * This is the canonical shape that all adapters must consume.
@@ -143,6 +273,11 @@ export interface GEOOutputContract {
   titleMeta: TitleMetaContract;
   answerCapsule: AnswerCapsuleContract;
   serviceDescriptions: ServiceDescriptionsContract;
+  whyChooseUs?: WhyChooseUsContract;
+  teamBios?: TeamBioContract;
+  howWeWork?: HowWeWorkContract;
+  caseStudies?: CaseStudyContract;
+  testimonials?: TestimonialContract;
   faq: FAQContract;
   schema: SchemaContract;
   allSources: string[];
