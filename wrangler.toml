@@ -1,8 +1,7 @@
 name = "nico-geo-worker"
 main = "worker/worker.ts"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-12-01"
 
-# KV Namespaces
 [[kv_namespaces]]
 binding = "NICO_GEO_KEYS"
 id = "9d693a4b02694a2cb693f2ef6464473a"
@@ -11,7 +10,6 @@ id = "9d693a4b02694a2cb693f2ef6464473a"
 binding = "NICO_GEO_SESSIONS"
 id = "19ff9213bf4843d1affc9c2c50946081"
 
-# Durable Objects
 [[durable_objects.bindings]]
 name = "RATE_LIMITER"
 class_name = "RateLimiterDO"
