@@ -1659,26 +1659,94 @@ const AUDIT_UI_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>GEO Audit - SEO Analysis</title>
+  <title>Nico GEO Content Maker</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); color: #fff; min-height: 100vh; }
-    .container { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
-    .header { text-align: center; margin-bottom: 40px; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 40px 20px; }
+    .header { text-align: center; margin-bottom: 30px; }
     .header h1 { font-size: 2.5rem; margin-bottom: 8px; background: linear-gradient(90deg, #4f46e5, #7c3aed); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
     .header p { color: #94a3b8; }
+
+    /* Tabs */
+    .tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 30px; }
+    .tab { padding: 12px 28px; font-size: 15px; font-weight: 600; background: rgba(30, 41, 59, 0.5); color: #94a3b8; border: 1px solid #334155; border-radius: 10px; cursor: pointer; transition: all 0.2s; }
+    .tab:hover { background: rgba(51, 65, 85, 0.5); }
+    .tab.active { background: linear-gradient(90deg, #4f46e5, #7c3aed); color: white; border-color: transparent; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Form Sections */
+    .form-section { background: rgba(30, 41, 59, 0.5); border: 1px solid #334155; border-radius: 16px; padding: 24px; margin-bottom: 24px; }
+    .form-section h3 { font-size: 1.1rem; margin-bottom: 16px; color: #e2e8f0; display: flex; align-items: center; gap: 10px; }
+    .form-section h3 .icon { font-size: 1.2rem; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .form-group { margin-bottom: 0; }
+    .form-group.full-width { grid-column: 1 / -1; }
+    .form-group label { display: block; font-size: 0.85rem; color: #94a3b8; margin-bottom: 6px; }
+    .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 12px 14px; font-size: 14px; border: 1px solid #334155; border-radius: 8px; background: #1e293b; color: #fff; outline: none; }
+    .form-group input:focus, .form-group textarea:focus, .form-group select:focus { border-color: #4f46e5; }
+    .form-group textarea { resize: vertical; min-height: 80px; }
+    .form-group select option { background: #1e293b; }
+
+    /* Generator Toggles */
+    .generators-section { margin-bottom: 16px; }
+    .generators-section h4 { font-size: 0.9rem; color: #94a3b8; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .generators-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+    .generator-toggle { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; background: rgba(30, 41, 59, 0.8); border: 1px solid #334155; border-radius: 8px; cursor: pointer; transition: all 0.2s; user-select: none; }
+    .generator-toggle:hover { border-color: #4f46e5; }
+    .generator-toggle.active { border-color: #4f46e5; background: rgba(79, 70, 229, 0.15); }
+    .generator-toggle .info { display: flex; align-items: center; gap: 8px; }
+    .generator-toggle .name { font-size: 0.85rem; font-weight: 500; }
+    .generator-toggle .badge { font-size: 0.6rem; padding: 2px 5px; border-radius: 4px; background: rgba(16, 185, 129, 0.2); color: #10b981; }
+    .toggle-switch { width: 36px; height: 20px; background: #334155; border-radius: 10px; position: relative; transition: background 0.2s; flex-shrink: 0; }
+    .toggle-switch.on { background: #4f46e5; }
+    .toggle-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: white; border-radius: 50%; transition: transform 0.2s; }
+    .toggle-switch.on::after { transform: translateX(16px); }
+
+    /* Quick Actions */
+    .quick-actions { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+    .quick-btn { padding: 8px 16px; font-size: 0.8rem; font-weight: 500; background: #334155; color: #e2e8f0; border: none; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+    .quick-btn:hover { background: #475569; }
+
+    /* Buttons */
+    .btn { padding: 14px 32px; font-size: 15px; font-weight: 600; border: none; border-radius: 10px; cursor: pointer; transition: all 0.2s; }
+    .btn-primary { background: linear-gradient(90deg, #4f46e5, #7c3aed); color: white; }
+    .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 40px rgba(79, 70, 229, 0.3); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .btn-row { display: flex; gap: 12px; justify-content: center; margin-top: 24px; }
+
+    /* Results */
+    .gen-results { background: rgba(30, 41, 59, 0.5); border: 1px solid #334155; border-radius: 16px; padding: 24px; margin-top: 24px; display: none; }
+    .gen-results.visible { display: block; }
+    .gen-results h3 { font-size: 1.1rem; margin-bottom: 16px; color: #e2e8f0; }
+    .result-block { margin-bottom: 20px; border: 1px solid #334155; border-radius: 10px; overflow: hidden; }
+    .result-header { padding: 12px 16px; background: rgba(79, 70, 229, 0.1); border-bottom: 1px solid #334155; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+    .result-header h4 { font-size: 0.95rem; color: #a5b4fc; display: flex; align-items: center; gap: 8px; }
+    .result-header h4::before { content: ''; width: 8px; height: 8px; background: #4f46e5; border-radius: 2px; }
+    .result-header .expand-arrow { transition: transform 0.2s; }
+    .result-header.open .expand-arrow { transform: rotate(180deg); }
+    .result-content { padding: 16px; background: #0f172a; font-family: monospace; font-size: 13px; overflow-x: auto; white-space: pre-wrap; max-height: 400px; overflow-y: auto; display: none; }
+    .result-content.visible { display: block; }
+    .result-content.html-preview { font-family: inherit; white-space: normal; }
+
+    /* Status */
+    .status { text-align: center; padding: 20px; color: #94a3b8; display: none; }
+    .status.visible { display: block; }
+    .status.error { color: #f87171; background: rgba(248, 113, 113, 0.1); border-radius: 12px; }
+    .status .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid rgba(79, 70, 229, 0.3); border-top-color: #4f46e5; border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 12px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Audit Tab Styles */
     .input-section { display: flex; gap: 12px; justify-content: center; margin-bottom: 40px; }
     .input-section input { width: 400px; padding: 16px 20px; font-size: 16px; border: 2px solid #334155; border-radius: 12px; background: #1e293b; color: #fff; outline: none; }
     .input-section input:focus { border-color: #4f46e5; }
     .input-section button { padding: 16px 32px; font-size: 16px; font-weight: 600; background: linear-gradient(90deg, #4f46e5, #7c3aed); color: white; border: none; border-radius: 12px; cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; }
     .input-section button:hover { transform: translateY(-2px); box-shadow: 0 10px 40px rgba(79, 70, 229, 0.3); }
     .input-section button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-    .status { text-align: center; padding: 20px; color: #94a3b8; display: none; }
-    .status.visible { display: block; }
-    .status.error { color: #f87171; background: rgba(248, 113, 113, 0.1); border-radius: 12px; }
     .results { display: none; }
     .results.visible { display: block; }
-    .score-section { display: flex; justify-content: center; align-items: center; gap: 60px; margin-bottom: 40px; padding: 40px; background: rgba(30, 41, 59, 0.5); border-radius: 24px; border: 1px solid #334155; }
+    .score-section { display: flex; justify-content: center; align-items: center; gap: 60px; margin-bottom: 40px; padding: 40px; background: rgba(30, 41, 59, 0.5); border-radius: 24px; border: 1px solid #334155; flex-wrap: wrap; }
     .score-dial { position: relative; width: 200px; height: 200px; }
     .score-dial svg { transform: rotate(-90deg); }
     .score-dial .bg { fill: none; stroke: #334155; stroke-width: 12; }
@@ -1727,75 +1795,407 @@ const AUDIT_UI_HTML = `<!DOCTYPE html>
 <body>
   <div class="container">
     <div class="header">
-      <h1>GEO Audit</h1>
-      <p>Comprehensive SEO analysis for AI search visibility</p>
+      <h1>Nico GEO Content Maker</h1>
+      <p>AI-powered content generation and SEO analysis</p>
     </div>
 
-    <div class="input-section">
-      <input type="url" id="siteUrl" placeholder="https://example.com" />
-      <button id="runAudit" onclick="runAudit()">Analyze Site</button>
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('generate')">Generate Content</button>
+      <button class="tab" onclick="switchTab('audit')">Site Audit</button>
     </div>
 
-    <div class="status" id="status"></div>
-
-    <div class="results" id="results">
-      <div class="score-section">
-        <div class="score-dial">
-          <svg width="200" height="200" viewBox="0 0 200 200">
-            <circle class="bg" cx="100" cy="100" r="88" />
-            <circle class="progress" id="scoreCircle" cx="100" cy="100" r="88" stroke-dasharray="553" stroke-dashoffset="553" />
-          </svg>
-          <div class="score-text">
-            <div class="score-value" id="scoreValue">0</div>
-            <div class="score-label">GEO Score</div>
+    <!-- Generate Tab -->
+    <div id="generateTab" class="tab-content active">
+      <!-- Business Information -->
+      <div class="form-section">
+        <h3><span class="icon">&#128188;</span> Business Information</h3>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Business Name *</label>
+            <input type="text" id="businessName" placeholder="e.g., Mike's Plumbing" required />
+          </div>
+          <div class="form-group">
+            <label>City *</label>
+            <input type="text" id="city" placeholder="e.g., Austin" required />
+          </div>
+          <div class="form-group">
+            <label>State *</label>
+            <input type="text" id="state" placeholder="e.g., TX" required />
+          </div>
+          <div class="form-group">
+            <label>Industry</label>
+            <select id="industry">
+              <option value="">Auto-detect</option>
+              <option value="plumbing">Plumbing</option>
+              <option value="hvac">HVAC</option>
+              <option value="electrical">Electrical</option>
+              <option value="roofing">Roofing</option>
+              <option value="contractor">General Contractor</option>
+              <option value="realEstate">Real Estate</option>
+              <option value="mortgage">Mortgage</option>
+              <option value="lawyer">Legal/Attorney</option>
+              <option value="landscaping">Landscaping</option>
+              <option value="pools">Pools</option>
+            </select>
+          </div>
+          <div class="form-group full-width">
+            <label>Services (comma-separated) *</label>
+            <input type="text" id="services" placeholder="e.g., drain cleaning, water heater repair, emergency plumbing" required />
+          </div>
+          <div class="form-group full-width">
+            <label>Phone Number</label>
+            <input type="text" id="phone" placeholder="e.g., (512) 555-1234" />
+          </div>
+          <div class="form-group full-width">
+            <label>Unique Selling Points (optional)</label>
+            <textarea id="usp" placeholder="e.g., 24/7 emergency service, 30+ years experience, family owned"></textarea>
           </div>
         </div>
-        <div class="score-info">
-          <div class="readiness-badge" id="readinessBadge">Analyzing...</div>
-          <div class="site-url" id="siteUrlDisplay"></div>
-          <div class="audit-time" id="auditTime"></div>
+      </div>
+
+      <!-- Generator Selection -->
+      <div class="form-section">
+        <h3><span class="icon">&#9881;</span> Select Generators</h3>
+
+        <div class="quick-actions">
+          <button class="quick-btn" onclick="selectAll()">Select All</button>
+          <button class="quick-btn" onclick="selectNone()">Select None</button>
+          <button class="quick-btn" onclick="selectCore()">Core Only</button>
+          <button class="quick-btn" onclick="selectIndustry()">Industry Only</button>
+        </div>
+
+        <div class="generators-section">
+          <h4>Core Generators (All Industries)</h4>
+          <div class="generators-grid" id="coreGenerators">
+            <div class="generator-toggle active" data-id="titleMeta" onclick="toggleGenerator(this)">
+              <div class="info"><span class="name">Title & Meta</span></div>
+              <div class="toggle-switch on"></div>
+            </div>
+            <div class="generator-toggle active" data-id="answerCapsule" onclick="toggleGenerator(this)">
+              <div class="info"><span class="name">Answer Capsule</span></div>
+              <div class="toggle-switch on"></div>
+            </div>
+            <div class="generator-toggle active" data-id="serviceDescription" onclick="toggleGenerator(this)">
+              <div class="info"><span class="name">Service Descriptions</span></div>
+              <div class="toggle-switch on"></div>
+            </div>
+            <div class="generator-toggle active" data-id="whyChooseUs" onclick="toggleGenerator(this)">
+              <div class="info"><span class="name">Why Choose Us</span></div>
+              <div class="toggle-switch on"></div>
+            </div>
+            <div class="generator-toggle active" data-id="teamBio" onclick="toggleGenerator(this)">
+              <div class="info"><span class="name">Team Bios</span></div>
+              <div class="toggle-switch on"></div>
+            </div>
+            <div class="generator-toggle active" data-id="howWeWork" onclick="toggleGenerator(this)">
+              <div class="info"><span class="name">How We Work</span></div>
+              <div class="toggle-switch on"></div>
+            </div>
+            <div class="generator-toggle active" data-id="caseStudy" onclick="toggleGenerator(this)">
+              <div class="info"><span class="name">Case Studies</span></div>
+              <div class="toggle-switch on"></div>
+            </div>
+            <div class="generator-toggle active" data-id="testimonial" onclick="toggleGenerator(this)">
+              <div class="info"><span class="name">Testimonials</span></div>
+              <div class="toggle-switch on"></div>
+            </div>
+            <div class="generator-toggle active" data-id="faq" onclick="toggleGenerator(this)">
+              <div class="info"><span class="name">FAQs</span></div>
+              <div class="toggle-switch on"></div>
+            </div>
+            <div class="generator-toggle active" data-id="schema" onclick="toggleGenerator(this)">
+              <div class="info"><span class="name">Schema Markup</span></div>
+              <div class="toggle-switch on"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="generators-section">
+          <h4>Industry-Specific Generators</h4>
+          <div class="generators-grid" id="industryGenerators">
+            <div class="generator-toggle" data-id="propertyMarketData" onclick="toggleGenerator(this)">
+              <div class="info">
+                <span class="name">Property Market</span>
+                <span class="badge">Real Estate</span>
+              </div>
+              <div class="toggle-switch"></div>
+            </div>
+            <div class="generator-toggle" data-id="permitsAndCodes" onclick="toggleGenerator(this)">
+              <div class="info">
+                <span class="name">Permits & Codes</span>
+                <span class="badge">Trade</span>
+              </div>
+              <div class="toggle-switch"></div>
+            </div>
+            <div class="generator-toggle" data-id="localCourtProcess" onclick="toggleGenerator(this)">
+              <div class="info">
+                <span class="name">Court Process</span>
+                <span class="badge">Legal</span>
+              </div>
+              <div class="toggle-switch"></div>
+            </div>
+            <div class="generator-toggle" data-id="firstTimeBuyerPrograms" onclick="toggleGenerator(this)">
+              <div class="info">
+                <span class="name">Buyer Programs</span>
+                <span class="badge">Mortgage</span>
+              </div>
+              <div class="toggle-switch"></div>
+            </div>
+            <div class="generator-toggle" data-id="seasonalClimate" onclick="toggleGenerator(this)">
+              <div class="info">
+                <span class="name">Seasonal Climate</span>
+                <span class="badge">HVAC</span>
+              </div>
+              <div class="toggle-switch"></div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="top-issues">
-        <div class="section-title">
-          <div class="icon"><svg width="16" height="16" fill="white" viewBox="0 0 20 20"><path d="M10 2L2 18h16L10 2zm0 4l5.5 10h-11L10 6z"/></svg></div>
-          Top Priority Issues
-        </div>
-        <div id="topIssuesList"></div>
+      <!-- Generate Button -->
+      <div class="btn-row">
+        <button class="btn btn-primary" id="generateBtn" onclick="runGenerate()">Generate Content</button>
       </div>
 
-      <div class="expandable-section">
-        <div class="expand-header" onclick="toggleSection('technical')">
-          <h3><span>🔧</span> Technical Issues <span class="count" id="technicalCount">0</span></h3>
-          <svg class="expand-icon" id="technicalIcon" width="20" height="20" fill="#94a3b8" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>
-        </div>
-        <div class="expand-content" id="technicalContent"></div>
+      <!-- Status -->
+      <div class="status" id="genStatus"></div>
+
+      <!-- Results -->
+      <div class="gen-results" id="genResults">
+        <h3>Generated Content</h3>
+        <div id="genResultsList"></div>
+      </div>
+    </div>
+
+    <!-- Audit Tab -->
+    <div id="auditTab" class="tab-content">
+      <div class="input-section">
+        <input type="url" id="siteUrl" placeholder="https://example.com" />
+        <button id="runAudit" onclick="runAudit()">Analyze Site</button>
       </div>
 
-      <div class="expandable-section">
-        <div class="expand-header" onclick="toggleSection('content')">
-          <h3><span>📝</span> Content Issues <span class="count" id="contentCount">0</span></h3>
-          <svg class="expand-icon" id="contentIcon" width="20" height="20" fill="#94a3b8" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>
-        </div>
-        <div class="expand-content" id="contentContent"></div>
-      </div>
+      <div class="status" id="auditStatus"></div>
 
-      <div class="expandable-section">
-        <div class="expand-header" onclick="toggleSection('trust')">
-          <h3><span>⭐</span> Trust & Conversion <span class="count" id="trustCount">0</span></h3>
-          <svg class="expand-icon" id="trustIcon" width="20" height="20" fill="#94a3b8" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>
+      <div class="results" id="auditResults">
+        <div class="score-section">
+          <div class="score-dial">
+            <svg width="200" height="200" viewBox="0 0 200 200">
+              <circle class="bg" cx="100" cy="100" r="88" />
+              <circle class="progress" id="scoreCircle" cx="100" cy="100" r="88" stroke-dasharray="553" stroke-dashoffset="553" />
+            </svg>
+            <div class="score-text">
+              <div class="score-value" id="scoreValue">0</div>
+              <div class="score-label">GEO Score</div>
+            </div>
+          </div>
+          <div class="score-info">
+            <div class="readiness-badge" id="readinessBadge">Analyzing...</div>
+            <div class="site-url" id="siteUrlDisplay"></div>
+            <div class="audit-time" id="auditTime"></div>
+          </div>
         </div>
-        <div class="expand-content" id="trustContent"></div>
-      </div>
 
-      <div class="footer">
-        <p>GEO Audit powered by Nico-GEO Engine</p>
+        <div class="top-issues">
+          <div class="section-title">
+            <div class="icon"><svg width="16" height="16" fill="white" viewBox="0 0 20 20"><path d="M10 2L2 18h16L10 2zm0 4l5.5 10h-11L10 6z"/></svg></div>
+            Top Priority Issues
+          </div>
+          <div id="topIssuesList"></div>
+        </div>
+
+        <div class="expandable-section">
+          <div class="expand-header" onclick="toggleSection('technical')">
+            <h3><span>&#128295;</span> Technical Issues <span class="count" id="technicalCount">0</span></h3>
+            <svg class="expand-icon" id="technicalIcon" width="20" height="20" fill="#94a3b8" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>
+          </div>
+          <div class="expand-content" id="technicalContent"></div>
+        </div>
+
+        <div class="expandable-section">
+          <div class="expand-header" onclick="toggleSection('content')">
+            <h3><span>&#128221;</span> Content Issues <span class="count" id="contentCount">0</span></h3>
+            <svg class="expand-icon" id="contentIcon" width="20" height="20" fill="#94a3b8" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>
+          </div>
+          <div class="expand-content" id="contentContent"></div>
+        </div>
+
+        <div class="expandable-section">
+          <div class="expand-header" onclick="toggleSection('trust')">
+            <h3><span>&#11088;</span> Trust & Conversion <span class="count" id="trustCount">0</span></h3>
+            <svg class="expand-icon" id="trustIcon" width="20" height="20" fill="#94a3b8" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>
+          </div>
+          <div class="expand-content" id="trustContent"></div>
+        </div>
       </div>
+    </div>
+
+    <div class="footer">
+      <p>Nico GEO Content Maker - AI-powered content for local businesses</p>
     </div>
   </div>
 
   <script>
+    // Tab switching
+    function switchTab(tab) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      document.querySelector(\`.tab:nth-child(\${tab === 'generate' ? 1 : 2})\`).classList.add('active');
+      document.getElementById(tab + 'Tab').classList.add('active');
+    }
+
+    // Generator toggle
+    function toggleGenerator(el) {
+      el.classList.toggle('active');
+      el.querySelector('.toggle-switch').classList.toggle('on');
+    }
+
+    // Quick actions
+    function selectAll() {
+      document.querySelectorAll('.generator-toggle').forEach(el => {
+        el.classList.add('active');
+        el.querySelector('.toggle-switch').classList.add('on');
+      });
+    }
+    function selectNone() {
+      document.querySelectorAll('.generator-toggle').forEach(el => {
+        el.classList.remove('active');
+        el.querySelector('.toggle-switch').classList.remove('on');
+      });
+    }
+    function selectCore() {
+      selectNone();
+      document.querySelectorAll('#coreGenerators .generator-toggle').forEach(el => {
+        el.classList.add('active');
+        el.querySelector('.toggle-switch').classList.add('on');
+      });
+    }
+    function selectIndustry() {
+      selectNone();
+      document.querySelectorAll('#industryGenerators .generator-toggle').forEach(el => {
+        el.classList.add('active');
+        el.querySelector('.toggle-switch').classList.add('on');
+      });
+    }
+
+    // Get selected generators
+    function getSelectedGenerators() {
+      return Array.from(document.querySelectorAll('.generator-toggle.active'))
+        .map(el => el.dataset.id);
+    }
+
+    // Generate content
+    async function runGenerate() {
+      const btn = document.getElementById('generateBtn');
+      const status = document.getElementById('genStatus');
+      const results = document.getElementById('genResults');
+
+      const businessName = document.getElementById('businessName').value.trim();
+      const city = document.getElementById('city').value.trim();
+      const state = document.getElementById('state').value.trim();
+      const services = document.getElementById('services').value.trim();
+      const phone = document.getElementById('phone').value.trim();
+      const usp = document.getElementById('usp').value.trim();
+      const industry = document.getElementById('industry').value;
+
+      if (!businessName || !city || !state || !services) {
+        alert('Please fill in all required fields (Business Name, City, State, Services)');
+        return;
+      }
+
+      const selectedGenerators = getSelectedGenerators();
+      if (selectedGenerators.length === 0) {
+        alert('Please select at least one generator');
+        return;
+      }
+
+      btn.disabled = true;
+      status.className = 'status visible';
+      status.innerHTML = '<div class="spinner"></div><div>Generating content... This may take a minute.</div>';
+      results.className = 'gen-results';
+
+      try {
+        const payload = {
+          businessInput: {
+            businessName,
+            city,
+            state,
+            services: services.split(',').map(s => s.trim()).filter(Boolean),
+            phone: phone || undefined,
+            uniqueSellingPoints: usp ? usp.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+            industry: industry || undefined
+          },
+          generators: {
+            include: selectedGenerators
+          },
+          constraints: {
+            noHallucinations: true
+          }
+        };
+
+        const res = await fetch('/ui/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+
+        if (data.status === 'error' || !res.ok) {
+          throw new Error(data.message || data.error || 'Generation failed');
+        }
+
+        // Render results
+        const resultsList = document.getElementById('genResultsList');
+        resultsList.innerHTML = '';
+
+        const outputs = data.results || data;
+        const entries = Object.entries(outputs).filter(([k]) =>
+          !['summary', 'status', 'message', 'requestId'].includes(k)
+        );
+
+        entries.forEach(([key, value]) => {
+          const block = document.createElement('div');
+          block.className = 'result-block';
+
+          const header = document.createElement('div');
+          header.className = 'result-header';
+          header.innerHTML = \`<h4>\${formatName(key)}</h4><svg class="expand-arrow" width="16" height="16" fill="#94a3b8" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z"/></svg>\`;
+
+          const content = document.createElement('div');
+          content.className = 'result-content';
+          content.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+
+          header.onclick = () => {
+            header.classList.toggle('open');
+            content.classList.toggle('visible');
+          };
+
+          block.appendChild(header);
+          block.appendChild(content);
+          resultsList.appendChild(block);
+        });
+
+        status.className = 'status';
+        results.className = 'gen-results visible';
+
+        // Auto-expand first result
+        const firstHeader = resultsList.querySelector('.result-header');
+        if (firstHeader) firstHeader.click();
+
+      } catch (err) {
+        status.className = 'status visible error';
+        status.textContent = 'Error: ' + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function formatName(key) {
+      return key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase()).trim();
+    }
+
+    // Audit section toggle
     function toggleSection(name) {
       const content = document.getElementById(name + 'Content');
       const icon = document.getElementById(name + 'Icon');
@@ -1825,21 +2225,21 @@ const AUDIT_UI_HTML = `<!DOCTYPE html>
     }
 
     function renderPass(text) {
-      return \`<div class="pass-item">✓ \${text}</div>\`;
+      return \`<div class="pass-item">&#10003; \${text}</div>\`;
     }
 
     async function runAudit() {
       const urlInput = document.getElementById('siteUrl');
       const btn = document.getElementById('runAudit');
-      const status = document.getElementById('status');
-      const results = document.getElementById('results');
+      const status = document.getElementById('auditStatus');
+      const results = document.getElementById('auditResults');
       const siteUrl = urlInput.value.trim();
 
       if (!siteUrl) { alert('Please enter a URL'); return; }
 
       btn.disabled = true;
       status.className = 'status visible';
-      status.innerHTML = '<div style="font-size:1.5rem;margin-bottom:8px;">🔍</div>Analyzing site... This may take a moment.';
+      status.innerHTML = '<div class="spinner"></div><div>Analyzing site... This may take a moment.</div>';
       results.className = 'results';
 
       try {
@@ -1852,7 +2252,6 @@ const AUDIT_UI_HTML = `<!DOCTYPE html>
 
         if (data.status === 'error') throw new Error(data.message || 'Audit failed');
 
-        // Update score dial
         const score = data.score || 0;
         const circle = document.getElementById('scoreCircle');
         const circumference = 553;
@@ -1862,20 +2261,16 @@ const AUDIT_UI_HTML = `<!DOCTYPE html>
         document.getElementById('scoreValue').textContent = score;
         document.getElementById('scoreValue').style.color = getScoreColor(score);
 
-        // Update readiness badge
         const badge = document.getElementById('readinessBadge');
         badge.textContent = data.readiness;
         badge.className = 'readiness-badge readiness-' + data.readiness.toLowerCase().replace(' ', '-');
 
-        // Update site info
         document.getElementById('siteUrlDisplay').textContent = siteUrl;
         document.getElementById('auditTime').textContent = 'Audited: ' + new Date().toLocaleString();
 
-        // Render top issues
         const topList = document.getElementById('topIssuesList');
         topList.innerHTML = (data.topIssues || []).map(i => renderIssue(i)).join('');
 
-        // Render sections
         const sections = data.sections || {};
         ['technical', 'content', 'trust'].forEach(name => {
           const items = sections[name] || [];
@@ -2244,6 +2639,105 @@ async function handleUIAudit(request: Request): Promise<Response> {
 }
 
 /**
+ * Handles the UI generate endpoint (no auth required).
+ * Takes form data from UI and generates content.
+ */
+async function handleUIGenerate(request: Request): Promise<Response> {
+  try {
+    const body = await request.json() as {
+      businessInput?: {
+        businessName?: string;
+        city?: string;
+        state?: string;
+        services?: string[];
+        phone?: string;
+        uniqueSellingPoints?: string[];
+        industry?: string;
+      };
+      generators?: {
+        include?: string[];
+        exclude?: string[];
+      };
+      constraints?: {
+        noHallucinations?: boolean;
+      };
+    };
+
+    // Validate required fields
+    if (!body.businessInput) {
+      return new Response(JSON.stringify({ status: 'error', message: 'businessInput is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      });
+    }
+
+    const { businessName, city, state, services } = body.businessInput;
+
+    if (!businessName || typeof businessName !== 'string') {
+      return new Response(JSON.stringify({ status: 'error', message: 'businessName is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      });
+    }
+
+    if (!city || typeof city !== 'string') {
+      return new Response(JSON.stringify({ status: 'error', message: 'city is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      });
+    }
+
+    if (!state || typeof state !== 'string') {
+      return new Response(JSON.stringify({ status: 'error', message: 'state is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      });
+    }
+
+    if (!services || !Array.isArray(services) || services.length === 0) {
+      return new Response(JSON.stringify({ status: 'error', message: 'services array is required' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+      });
+    }
+
+    // Build the RunRequest structure
+    const runRequest: RunRequest = {
+      mode: 'generate',
+      businessInput: {
+        businessName,
+        city,
+        state,
+        services,
+        phone: body.businessInput.phone,
+        uniqueSellingPoints: body.businessInput.uniqueSellingPoints,
+        constraints: {
+          noHallucinations: true,
+        },
+      },
+      generators: body.generators,
+      constraints: {
+        noHallucinations: true,
+      },
+    };
+
+    // Call the generate mode handler
+    const response = await handleGenerateMode(runRequest);
+
+    return new Response(JSON.stringify({ status: 'success', ...response }, null, 2), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Generation failed';
+    return new Response(JSON.stringify({ status: 'error', message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json', ...CORS_HEADERS },
+    });
+  }
+}
+
+/**
  * Main request handler for the Worker.
  */
 async function handleRequest(request: Request, env: Env): Promise<Response> {
@@ -2279,6 +2773,13 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
   // ============================================
   if (url.pathname === '/ui/audit' && request.method === 'POST') {
     return handleUIAudit(request);
+  }
+
+  // ============================================
+  // ROUTE: POST /ui/generate (UI generate endpoint, no auth)
+  // ============================================
+  if (url.pathname === '/ui/generate' && request.method === 'POST') {
+    return handleUIGenerate(request);
   }
 
   // ============================================
