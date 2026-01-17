@@ -264,6 +264,248 @@ export interface TestimonialContract {
   sources: string[];
 }
 
+// ============================================================
+// INDUSTRY-SPECIFIC GENERATOR OUTPUT CONTRACTS
+// ============================================================
+
+/**
+ * Market trend data point.
+ */
+export interface MarketTrendPoint {
+  period: string;
+  medianPrice: number;
+  priceChange: number;
+  daysOnMarket: number;
+  inventory: number;
+}
+
+/**
+ * Hot area/neighborhood data.
+ */
+export interface HotAreaData {
+  name: string;
+  medianPrice: number;
+  priceGrowth: number;
+  demandLevel: 'high' | 'medium' | 'low';
+  highlights: string[];
+}
+
+/**
+ * Property Market Data output.
+ * Generated for: Real Estate, Mortgage
+ */
+export interface PropertyMarketDataContract {
+  location: string;
+  generatedAt: string;
+  marketOverview: {
+    medianHomePrice: number;
+    yearOverYearChange: number;
+    averageDaysOnMarket: number;
+    activeListings: number;
+    marketType: 'buyer' | 'seller' | 'balanced';
+  };
+  trends: MarketTrendPoint[];
+  hotAreas: HotAreaData[];
+  priceRanges: {
+    range: string;
+    percentOfMarket: number;
+    typicalPropertyType: string;
+  }[];
+  disclaimer: string;
+  sources: string[];
+}
+
+/**
+ * Permit requirement data.
+ */
+export interface PermitRequirement {
+  permitType: string;
+  description: string;
+  requiredFor: string[];
+  estimatedCost: string;
+  processingTime: string;
+  issuingAuthority: string;
+}
+
+/**
+ * Building code information.
+ */
+export interface BuildingCodeInfo {
+  codeType: string;
+  version: string;
+  keyRequirements: string[];
+  commonViolations: string[];
+  resources: string[];
+}
+
+/**
+ * Permits & Building Codes output.
+ * Generated for: Plumbing, HVAC, Electrical, Roofing, Contractor
+ */
+export interface PermitsAndCodesContract {
+  jurisdiction: string;
+  generatedAt: string;
+  permits: PermitRequirement[];
+  buildingCodes: BuildingCodeInfo[];
+  inspectionRequirements: {
+    stage: string;
+    description: string;
+    typicalDuration: string;
+  }[];
+  licensingRequirements: {
+    licenseType: string;
+    requirements: string[];
+    renewalPeriod: string;
+  }[];
+  disclaimer: string;
+  sources: string[];
+}
+
+/**
+ * Court procedure step.
+ */
+export interface CourtProcedureStep {
+  stepNumber: number;
+  name: string;
+  description: string;
+  typicalTimeline: string;
+  requiredDocuments: string[];
+  fees?: string;
+}
+
+/**
+ * Court filing information.
+ */
+export interface CourtFilingInfo {
+  filingType: string;
+  courtLevel: string;
+  filingFee: string;
+  requirements: string[];
+  deadlines: string[];
+}
+
+/**
+ * Local Court Process output.
+ * Generated for: Lawyers, Attorneys
+ */
+export interface LocalCourtProcessContract {
+  jurisdiction: string;
+  courtSystem: string;
+  generatedAt: string;
+  practiceAreas: {
+    area: string;
+    procedures: CourtProcedureStep[];
+    typicalDuration: string;
+  }[];
+  filingInformation: CourtFilingInfo[];
+  courtLocations: {
+    name: string;
+    address: string;
+    type: string;
+    hoursOfOperation: string;
+  }[];
+  importantDeadlines: {
+    name: string;
+    description: string;
+    statuteOfLimitations?: string;
+  }[];
+  disclaimer: string;
+  sources: string[];
+}
+
+/**
+ * Buyer assistance program.
+ */
+export interface BuyerProgram {
+  name: string;
+  level: 'federal' | 'state' | 'local';
+  type: 'grant' | 'loan' | 'tax-credit' | 'assistance';
+  eligibility: string[];
+  benefits: string[];
+  maxAmount?: string;
+  requirements: string[];
+  applicationProcess: string;
+  contactInfo?: string;
+}
+
+/**
+ * First-Time Buyer Programs output.
+ * Generated for: Mortgage, Real Estate
+ */
+export interface FirstTimeBuyerProgramsContract {
+  location: string;
+  generatedAt: string;
+  federalPrograms: BuyerProgram[];
+  statePrograms: BuyerProgram[];
+  localPrograms: BuyerProgram[];
+  taxCredits: {
+    name: string;
+    description: string;
+    maxBenefit: string;
+    eligibility: string[];
+  }[];
+  incomeGuidelines: {
+    areaMedianIncome: number;
+    incomeLimit80Percent: number;
+    incomeLimit120Percent: number;
+  };
+  disclaimer: string;
+  sources: string[];
+}
+
+/**
+ * Seasonal service timing.
+ */
+export interface SeasonalTiming {
+  season: 'spring' | 'summer' | 'fall' | 'winter';
+  months: string[];
+  services: {
+    name: string;
+    priority: 'essential' | 'recommended' | 'optional';
+    reason: string;
+    idealTiming: string;
+  }[];
+  weatherConsiderations: string[];
+}
+
+/**
+ * Climate zone information.
+ */
+export interface ClimateZoneInfo {
+  zone: string;
+  characteristics: string[];
+  challenges: string[];
+  recommendations: string[];
+}
+
+/**
+ * Seasonal & Climate output.
+ * Generated for: HVAC, Roofing, Landscaping, Pools
+ */
+export interface SeasonalClimateContract {
+  location: string;
+  generatedAt: string;
+  climateZone: ClimateZoneInfo;
+  seasonalTimings: SeasonalTiming[];
+  maintenanceSchedule: {
+    frequency: 'monthly' | 'quarterly' | 'semi-annual' | 'annual';
+    tasks: string[];
+    bestMonths: string[];
+  }[];
+  weatherAlerts: {
+    condition: string;
+    impact: string;
+    preventiveMeasures: string[];
+  }[];
+  energyEfficiencyTips: {
+    season: string;
+    tips: string[];
+    estimatedSavings?: string;
+  }[];
+  disclaimer: string;
+  sources: string[];
+}
+
 /**
  * Complete GEO pipeline output contract.
  * This is the canonical shape that all adapters must consume.
@@ -280,6 +522,12 @@ export interface GEOOutputContract {
   testimonials?: TestimonialContract;
   faq: FAQContract;
   schema: SchemaContract;
+  // Industry-specific generators (conditional based on detected industry)
+  propertyMarketData?: PropertyMarketDataContract;
+  permitsAndCodes?: PermitsAndCodesContract;
+  localCourtProcess?: LocalCourtProcessContract;
+  firstTimeBuyerPrograms?: FirstTimeBuyerProgramsContract;
+  seasonalClimate?: SeasonalClimateContract;
   allSources: string[];
 }
 

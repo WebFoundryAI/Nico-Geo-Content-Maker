@@ -73,6 +73,18 @@ export interface WriteBackConfig {
  * - targetRepo: { owner, repo, branch } to specify destination
  * - GitHub token in X-GitHub-Token header
  */
+/**
+ * Generator selection preferences.
+ */
+export interface GeneratorPreference {
+  /** Explicitly enable specific generators (overrides autoDetect) */
+  enabled?: string[];
+  /** Explicitly disable specific generators (always respected) */
+  disabled?: string[];
+  /** Auto-detect industry and include applicable generators (default: true) */
+  autoDetect?: boolean;
+}
+
 export interface RunRequest {
   mode: RunMode;
   siteUrl?: string;
@@ -87,6 +99,8 @@ export interface RunRequest {
   gscSnapshot?: GscSnapshotRow[];
   /** Target paths to process in improve mode (if not provided, auto-selects top N) */
   targetPaths?: string[];
+  /** Generator selection preferences (generate mode only) */
+  generators?: GeneratorPreference;
 }
 
 /**
@@ -102,6 +116,14 @@ export interface RunSummary {
   writeBackEnabled?: boolean;
   writeBackDryRun?: boolean;
   warnings?: string[];
+  /** Generators that were executed (generate mode) */
+  generatorsRun?: string[];
+  /** Generators that were skipped (generate mode) */
+  generatorsSkipped?: string[];
+  /** Detected industry type (generate mode with autoDetect) */
+  detectedIndustry?: string;
+  /** Execution time in milliseconds */
+  executionTimeMs?: number;
 }
 
 /**
@@ -230,12 +252,24 @@ export interface GenerateResults {
  * Type varies based on mode.
  */
 export interface RunResults {
-  // Generate mode results
+  // Generate mode results - Core generators
   titleMeta?: unknown;
   answerCapsule?: unknown;
   serviceDescriptions?: unknown;
+  whyChooseUs?: unknown;
+  teamBios?: unknown;
+  howWeWork?: unknown;
+  caseStudies?: unknown;
+  testimonials?: unknown;
   faq?: unknown;
   schema?: unknown;
+
+  // Generate mode results - Industry-specific generators
+  propertyMarketData?: unknown;
+  permitsAndCodes?: unknown;
+  localCourtProcess?: unknown;
+  firstTimeBuyerPrograms?: unknown;
+  seasonalClimate?: unknown;
 
   // Audit mode results
   audit?: AuditResults;

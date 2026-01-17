@@ -29,6 +29,14 @@
 import type { BusinessInput } from '../inputs/business.schema';
 import { validateBusinessInput } from '../core/rules/businessInput.validator';
 import { runGEOPipeline } from '../core/pipeline/geoPipeline';
+import { selectGenerators } from '../core/generators/selector';
+import {
+  generatePropertyMarketData,
+  generatePermitsAndCodes,
+  generateLocalCourtProcess,
+  generateFirstTimeBuyerPrograms,
+  generateSeasonalClimate,
+} from '../core/generators/industry';
 import { validateGEOOutput } from '../contracts/output.contract';
 import { crawlSite, DEFAULT_CRAWLER_CONFIG } from '../core/ingest/siteCrawler';
 import { analyzeGeoGaps } from '../core/analyze/geoGapAnalyzer';
@@ -733,14 +741,46 @@ async function handleImproveMode(
 /**
  * Handles "generate" mode execution.
  * Invokes the existing GEO pipeline with provided businessInput.
+ * Uses generator selector for conditional execution of industry-specific generators.
  */
 async function handleGenerateMode(request: RunRequest): Promise<RunResponse> {
   if (!request.businessInput) {
     throw new Error('businessInput is required for generate mode');
   }
 
-  // Execute the GEO pipeline
-  const pipelineOutput = runGEOPipeline(request.businessInput);
+  const startTime = Date.now();
+
+  // Select which generators to run based on preferences and auto-detection
+  const selection = await selectGenerators(request.businessInput, request.generators);
+
+  // Build skip array for pipeline based on disabled generators
+  const skipGenerators: Array<
+    | 'titleMeta'
+    | 'answerCapsule'
+    | 'serviceDescription'
+    | 'whyChooseUs'
+    | 'teamBio'
+    | 'howWeWork'
+    | 'caseStudy'
+    | 'testimonial'
+    | 'faq'
+    | 'schema'
+  > = [];
+
+  // Core generators - skip if not in enabled list
+  if (!selection.enabled.includes('titleMeta')) skipGenerators.push('titleMeta');
+  if (!selection.enabled.includes('answerCapsule')) skipGenerators.push('answerCapsule');
+  if (!selection.enabled.includes('serviceDescription')) skipGenerators.push('serviceDescription');
+  if (!selection.enabled.includes('whyChooseUs')) skipGenerators.push('whyChooseUs');
+  if (!selection.enabled.includes('teamBio')) skipGenerators.push('teamBio');
+  if (!selection.enabled.includes('howWeWork')) skipGenerators.push('howWeWork');
+  if (!selection.enabled.includes('caseStudy')) skipGenerators.push('caseStudy');
+  if (!selection.enabled.includes('testimonial')) skipGenerators.push('testimonial');
+  if (!selection.enabled.includes('faq')) skipGenerators.push('faq');
+  if (!selection.enabled.includes('schema')) skipGenerators.push('schema');
+
+  // Execute the GEO pipeline with skip options
+  const pipelineOutput = runGEOPipeline(request.businessInput, { skip: skipGenerators });
 
   // Validate output against contract
   const outputErrors = validateGEOOutput(pipelineOutput);
@@ -748,19 +788,93 @@ async function handleGenerateMode(request: RunRequest): Promise<RunResponse> {
     throw new Error(`Pipeline output validation failed: ${outputErrors.join(', ')}`);
   }
 
+  // Build results object with all generator outputs
+  const results: RunResults = {};
+
+  // Add core generator outputs if they were run
+  if (selection.enabled.includes('titleMeta')) {
+    results.titleMeta = pipelineOutput.titleMeta;
+  }
+  if (selection.enabled.includes('answerCapsule')) {
+    results.answerCapsule = pipelineOutput.answerCapsule;
+  }
+  if (selection.enabled.includes('serviceDescription')) {
+    results.serviceDescriptions = pipelineOutput.serviceDescriptions;
+  }
+  if (selection.enabled.includes('whyChooseUs') && pipelineOutput.whyChooseUs) {
+    results.whyChooseUs = pipelineOutput.whyChooseUs;
+  }
+  if (selection.enabled.includes('teamBio') && pipelineOutput.teamBios) {
+    results.teamBios = pipelineOutput.teamBios;
+  }
+  if (selection.enabled.includes('howWeWork') && pipelineOutput.howWeWork) {
+    results.howWeWork = pipelineOutput.howWeWork;
+  }
+  if (selection.enabled.includes('caseStudy') && pipelineOutput.caseStudies) {
+    results.caseStudies = pipelineOutput.caseStudies;
+  }
+  if (selection.enabled.includes('testimonial') && pipelineOutput.testimonials) {
+    results.testimonials = pipelineOutput.testimonials;
+  }
+  if (selection.enabled.includes('faq')) {
+    results.faq = pipelineOutput.faq;
+  }
+  if (selection.enabled.includes('schema')) {
+    results.schema = pipelineOutput.schema;
+  }
+
+  // Execute industry-specific generators if enabled
+  if (selection.enabled.includes('propertyMarketData')) {
+    try {
+      results.propertyMarketData = generatePropertyMarketData(request.businessInput);
+    } catch {
+      // Industry generator failures are non-fatal
+    }
+  }
+
+  if (selection.enabled.includes('permitsAndCodes')) {
+    try {
+      results.permitsAndCodes = generatePermitsAndCodes(request.businessInput);
+    } catch {
+      // Industry generator failures are non-fatal
+    }
+  }
+
+  if (selection.enabled.includes('localCourtProcess')) {
+    try {
+      results.localCourtProcess = generateLocalCourtProcess(request.businessInput);
+    } catch {
+      // Industry generator failures are non-fatal
+    }
+  }
+
+  if (selection.enabled.includes('firstTimeBuyerPrograms')) {
+    try {
+      results.firstTimeBuyerPrograms = generateFirstTimeBuyerPrograms(request.businessInput);
+    } catch {
+      // Industry generator failures are non-fatal
+    }
+  }
+
+  if (selection.enabled.includes('seasonalClimate')) {
+    try {
+      results.seasonalClimate = generateSeasonalClimate(request.businessInput);
+    } catch {
+      // Industry generator failures are non-fatal
+    }
+  }
+
+  const executionTimeMs = Date.now() - startTime;
+
   const summary: RunSummary = {
     mode: 'generate',
     processedAt: new Date().toISOString(),
     inputSource: 'businessInput',
-    sectionsGenerated: 5, // titleMeta, answerCapsule, serviceDescriptions, faq, schema
-  };
-
-  const results: RunResults = {
-    titleMeta: pipelineOutput.titleMeta,
-    answerCapsule: pipelineOutput.answerCapsule,
-    serviceDescriptions: pipelineOutput.serviceDescriptions,
-    faq: pipelineOutput.faq,
-    schema: pipelineOutput.schema,
+    sectionsGenerated: selection.enabled.length,
+    generatorsRun: selection.enabled,
+    generatorsSkipped: selection.disabled,
+    detectedIndustry: selection.detectedIndustry,
+    executionTimeMs,
   };
 
   return {
