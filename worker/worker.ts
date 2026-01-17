@@ -2029,19 +2029,19 @@ function analyzePageData(data: PageData, siteUrl: string): { issues: AuditIssue[
   let score = 100;
 
   // Clean body text and count words
-  const cleanText = data.bodyText.replace(/\\s+/g, ' ').trim();
-  data.wordCount = cleanText.split(/\\s+/).filter(w => w.length > 2).length;
+  const cleanText = data.bodyText.replace(/\s+/g, ' ').trim();
+  data.wordCount = cleanText.split(/\s+/).filter(w => w.length > 2).length;
 
   // Check for phone numbers
-  const phoneRegex = /(?:\\+?\\d{1,3}[-.\\s]?)?(?:\\(?\\d{2,4}\\)?[-.\\s]?)?\\d{3,4}[-.\\s]?\\d{3,4}/g;
+  const phoneRegex = /(?:\+?\d{1,3}[-.\s]?)?(?:\(?\d{2,4}\)?[-.\s]?)?\d{3,4}[-.\s]?\d{3,4}/g;
   data.hasPhone = phoneRegex.test(cleanText);
 
   // Check for address patterns
-  const addressRegex = /\\d+\\s+[a-zA-Z]+\\s+(street|st|road|rd|avenue|ave|lane|ln|drive|dr|way|court|ct)/i;
+  const addressRegex = /\d+\s+[a-zA-Z]+\s+(street|st|road|rd|avenue|ave|lane|ln|drive|dr|way|court|ct)/i;
   data.hasAddress = addressRegex.test(cleanText);
 
   // Check for FAQ patterns
-  data.hasFAQSection = /frequently\\s+asked|faq|common\\s+questions/i.test(cleanText);
+  data.hasFAQSection = /frequently\s+asked|faq|common\s+questions/i.test(cleanText);
 
   // Check for service keywords
   const serviceTerms = ['plumb', 'drain', 'pipe', 'leak', 'boiler', 'heating', 'emergency', 'repair', 'install', 'service'];
