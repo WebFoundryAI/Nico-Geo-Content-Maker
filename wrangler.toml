@@ -3,16 +3,13 @@ main = "worker/worker.ts"
 compatibility_date = "2024-01-01"
 
 # KV Namespaces
-# Create these in Cloudflare dashboard or via: wrangler kv:namespace create <NAME>
 [[kv_namespaces]]
 binding = "NICO_GEO_KEYS"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
-# preview_id = "REPLACE_WITH_PREVIEW_KV_NAMESPACE_ID"
+id = "9d693a4b02694a2cb693f2ef6464473a"
 
 [[kv_namespaces]]
 binding = "NICO_GEO_SESSIONS"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
-# preview_id = "REPLACE_WITH_PREVIEW_KV_NAMESPACE_ID"
+id = "19ff9213bf4843d1affc9c2c50946081"
 
 # Durable Objects
 [[durable_objects.bindings]]
