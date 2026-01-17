@@ -6,6 +6,8 @@
   "scripts": {
     "run:geo": "ts-node scripts/runGeoPipeline.ts",
     "test:smoke": "ts-node scripts/ciSmoke.ts",
+    "test:generators": "ts-node tests/generators/newGenerators.test.ts",
+    "test": "npm run test:smoke && npm run test:generators",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },

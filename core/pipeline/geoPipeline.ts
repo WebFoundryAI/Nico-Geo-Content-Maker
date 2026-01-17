@@ -18,6 +18,11 @@ import { enforceNoHallucinations } from '../rules/antiHallucination';
 import { generateTitleMeta, TitleMetaOutput } from '../generators/titleMeta.generator';
 import { generateAnswerCapsule, AnswerCapsuleOutput } from '../generators/answerCapsule.generator';
 import { generateServiceDescription, ServiceDescriptionOutput } from '../generators/serviceDescription.generator';
+import { generateWhyChooseUs, WhyChooseUsOutput } from '../generators/whyChooseUs.generator';
+import { generateTeamBio, TeamBioOutput } from '../generators/teamBio.generator';
+import { generateHowWeWork, HowWeWorkOutput } from '../generators/howWeWork.generator';
+import { generateCaseStudy, CaseStudyOutput } from '../generators/caseStudy.generator';
+import { generateTestimonial, TestimonialOutput } from '../generators/testimonial.generator';
 import { generateFAQ, FAQOutput } from '../generators/faq.generator';
 import { generateSchema, SchemaOutput } from '../generators/schema.generator';
 
@@ -34,6 +39,11 @@ export interface GEOPipelineOutput {
   titleMeta: TitleMetaOutput;
   answerCapsule: AnswerCapsuleOutput;
   serviceDescriptions: ServiceDescriptionOutput;
+  whyChooseUs?: WhyChooseUsOutput;
+  teamBios?: TeamBioOutput;
+  howWeWork?: HowWeWorkOutput;
+  caseStudies?: CaseStudyOutput;
+  testimonials?: TestimonialOutput;
   faq: FAQOutput;
   schema: SchemaOutput;
   allSources: string[];
@@ -44,7 +54,18 @@ export interface GEOPipelineOutput {
  */
 export interface PipelineOptions {
   /** Skip specific generators if needed */
-  skip?: Array<'titleMeta' | 'answerCapsule' | 'serviceDescription' | 'faq' | 'schema'>;
+  skip?: Array<
+    | 'titleMeta'
+    | 'answerCapsule'
+    | 'serviceDescription'
+    | 'whyChooseUs'
+    | 'teamBio'
+    | 'howWeWork'
+    | 'caseStudy'
+    | 'testimonial'
+    | 'faq'
+    | 'schema'
+  >;
 }
 
 /**
@@ -54,8 +75,13 @@ export interface PipelineOptions {
  * 1. Title & Meta
  * 2. Answer Capsule
  * 3. Service Descriptions
- * 4. FAQ
- * 5. Schema.org
+ * 4. Why Choose Us (NEW)
+ * 5. Team Bios (NEW)
+ * 6. How We Work (NEW)
+ * 7. Case Studies (NEW)
+ * 8. Testimonials (NEW)
+ * 9. FAQ
+ * 10. Schema.org
  *
  * @param input - BusinessInput data (single source of truth)
  * @param options - Optional pipeline configuration
@@ -95,24 +121,58 @@ export function runGEOPipeline(
     : generateServiceDescription(input);
   trackSources(serviceDescriptions.sources);
 
-  // PIPELINE STEP 4: FAQ
+  // PIPELINE STEP 4: Why Choose Us (NEW)
+  const whyChooseUs = skip.includes('whyChooseUs')
+    ? undefined
+    : generateWhyChooseUs(input);
+  if (whyChooseUs) trackSources(whyChooseUs.sources);
+
+  // PIPELINE STEP 5: Team Bios (NEW)
+  const teamBios = skip.includes('teamBio')
+    ? undefined
+    : generateTeamBio(input);
+  // Only track sources if team data was provided
+  if (teamBios && teamBios.team.length > 0) trackSources(teamBios.sources);
+
+  // PIPELINE STEP 6: How We Work (NEW)
+  const howWeWork = skip.includes('howWeWork')
+    ? undefined
+    : generateHowWeWork(input);
+  if (howWeWork) trackSources(howWeWork.sources);
+
+  // PIPELINE STEP 7: Case Studies (NEW)
+  const caseStudies = skip.includes('caseStudy')
+    ? undefined
+    : generateCaseStudy(input);
+  // Only track sources if case studies were provided
+  if (caseStudies && caseStudies.caseStudies.length > 0) trackSources(caseStudies.sources);
+
+  // PIPELINE STEP 8: Testimonials (NEW)
+  const testimonials = skip.includes('testimonial')
+    ? undefined
+    : generateTestimonial(input);
+  // Only track sources if testimonials were provided
+  if (testimonials && testimonials.testimonials.length > 0) trackSources(testimonials.sources);
+
+  // PIPELINE STEP 9: FAQ
   const faq = skip.includes('faq')
     ? createSkippedOutput<FAQOutput>('faq')
     : generateFAQ(input);
   trackSources(faq.sources);
 
-  // PIPELINE STEP 5: Schema.org
+  // PIPELINE STEP 10: Schema.org
   const schema = skip.includes('schema')
     ? createSkippedOutput<SchemaOutput>('schema')
     : generateSchema(input);
   trackSources(schema.sources);
 
   // Aggregate final output
-  return {
+  // Only include optional sections if they have content
+  const output: GEOPipelineOutput = {
     metadata: {
       generatedAt: new Date().toISOString(),
       businessName: input.business.name,
-      pipelineVersion: '1.0.0',
+      pipelineVersion: '2.0.0', // Version bump for new generators
     },
     titleMeta,
     answerCapsule,
@@ -121,6 +181,29 @@ export function runGEOPipeline(
     schema,
     allSources: Array.from(allSources),
   };
+
+  // Add optional sections only if they have meaningful content
+  if (whyChooseUs && whyChooseUs.differentiators.length > 0) {
+    output.whyChooseUs = whyChooseUs;
+  }
+
+  if (teamBios && teamBios.team.length > 0) {
+    output.teamBios = teamBios;
+  }
+
+  if (howWeWork && howWeWork.steps.length > 0) {
+    output.howWeWork = howWeWork;
+  }
+
+  if (caseStudies && caseStudies.caseStudies.length > 0) {
+    output.caseStudies = caseStudies;
+  }
+
+  if (testimonials && testimonials.testimonials.length > 0) {
+    output.testimonials = testimonials;
+  }
+
+  return output;
 }
 
 /**
